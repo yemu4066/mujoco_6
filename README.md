@@ -110,15 +110,72 @@ Navigation(
 
 ## 本地验证
 
-需要 ROS 环境（`sim/` 里的 MuJoCo 桥）才能跑仿真，但库本身不依赖 ROS。
-
-纯算法验证：
+### ① 纯库自检（不需要 ROS）
 
 ```bash
-python3 -c "
-import sys; sys.path.insert(0,'.')
-from nav import Navigation
-nav = Navigation('maps/rc2027.yaml')
-print(nav.set_goal(2.3, -1.3, yaw=0.0, pose=(4.75, -4.8, 1.57)))
-"
+cd mujoco_6
+python3 tests/selftest.py
 ```
+
+检查依赖、地图、膨胀、A*、MPC 初始化、三阶段闭环。全绿说明库本身没问题。
+
+**给主逻辑做验收就用这个。**
+
+### ② 接仿真（需要 ROS + MuJoCo）
+
+首次要建工作区并编译：
+
+```bash
+cd mujoco_6
+mkdir -p src
+ln -sfn ../../sim/nav_interfaces src/nav_interfaces
+ln -sfn ../../sim/mujoco_ros2_bridge src/mujoco_ros2_bridge
+colcon build --symlink-install --packages-select nav_interfaces mujoco_ros2_bridge
+```
+
+然后：
+
+```bash
+# 终端 1：仿真 + Foxglove
+source install/setup.bash
+ros2 launch mujoco_ros2_bridge bridge.launch.py
+
+# 终端 2：把库包成节点（可选，想在 Foxglove 里点目标时需要）
+source install/setup.bash
+python3 tests/nav_node.py
+
+# 或者用脚本直接跑一个目标
+python3 tests/sim_bridge.py 2.3 -1.3 0
+```
+
+Foxglove 连 `ws://127.0.0.1:8765`。
+
+**环境变量必须一致**，否则节点互相看不见：
+
+```bash
+export RMW_IMPLEMENTATION=rmw_zenoh_cpp
+export ROS_LOCALHOST_ONLY=1
+```
+
+### 三个测试脚本的分工
+
+| 脚本 | 需要 ROS | 用途 |
+|---|---|---|
+| `tests/selftest.py` | ❌ | 验证库本身，给主逻辑验收 |
+| `tests/nav_node.py` | ✅ | 把库包成 ROS 节点，在 Foxglove 里点目标调试 |
+| `tests/sim_bridge.py` | ✅ | 脚本化发一个目标并跟踪 |
+
+**这三个都不是库的一部分**，主逻辑只需要 `nav/` 和 `maps/`。
+
+## 交付给主逻辑
+
+只拷两个目录：
+
+```
+nav/
+maps/
+```
+
+**外加** `tests/selftest.py` 供他验收。
+
+依赖：`numpy`、`scipy`、`pyyaml`、`casadi`、`acados_template`。
