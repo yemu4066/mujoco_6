@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# acados 生成的求解器代码
+c_generated_code/
+mpc_ocp.json
+
+# MuJoCo 运行时日志
+MUJOCO_LOG.TXT
+
+# ROS 编译产物（colcon build 时产生）
+build/
+install/
+log/
+src/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
