@@ -1,0 +1,613 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  RC 2027 Field — Simulation model with movable game objects
+  ABU Robocon 2027 "The Pursuit of Mustika Nusantara" — MuJoCo 3.x, verified with 3.14.0
+
+  = field.xml (same 39 visual meshes, same materials, same sites) +
+    53 free-joint rigid bodies + a primitive collision layer.
+
+  Movable objects (specs from the official rulebook; see README for the table):
+      12 x sky block  : 0.2 m cube, 0.22 kg, collision = box, visual = two half-box meshes
+                        (red/blue faces), initial pose = official 5x5 chessboard layout
+      1  x Mustika    : sphere r = 0.10 m, 0.27 kg, resting in the pillar recess
+      40 x earth block: 0.35 m cube, 0.60 kg, 20 per team, stacked outside the fence
+                        next to each team's storage area (2 layers x 2 rows x 5 columns)
+      body names: skyblock_01..12 / mustika / earthblock_{red,blue}_01..20 (freejoint <name>_joint)
+
+  Collision layer (all geoms rgba="1 1 1 0" = invisible):
+      col_ground (10 x 10 m, covers the outside stacking area), col_l1, col_l2,
+      col_fence_{n,s,e,w}, col_l1fence_{n,s,e,w}, col_pillar_centre,
+      mustika_pillar_col + 12 x pillar_ring_* (the recess the Mustika rests in),
+      col_band_{red,blue}_{plat,step1..3,ramp} and col_l2stair_{red,blue}.
+      The 39 field meshes are visual-only (contype=0 conaffinity=0).
+
+  Load:
+      import mujoco
+      m = mujoco.MjModel.from_xml_path("mujoco_field/field_with_objects.xml")
+      # 190 geoms / 65 meshes / 53 bodies / nq=371 / nv=318
+
+  Verified (MuJoCo 3.14.0, timestep 2 ms): loads clean; after 1.5 s settling all 53 bodies
+  are stable (max move 2.1 mm = the deliberate 1.1 mm spawn clearance); pushing the Mustika
+  at 2 m/s rolls it ~132 cm, a sky block slides ~17 cm, an earth block ~81 cm.
+
+  Limits: L2 stair collision still has only one step; the ramp collision is a tilted slab
+  (no underside); masses are rulebook baselines (no domain randomisation applied).
+
+  See README.md for the full spec, regeneration notes, limitations and license.
+-->
+<mujoco model="rc2027_field_assembly">
+  <compiler angle="radian" meshdir="meshes" autolimits="true" balanceinertia="true" />
+  <option timestep="0.002" gravity="0 0 -9.81" />
+  <visual>
+    <headlight ambient="0.35 0.35 0.35" diffuse="0.65 0.65 0.65" specular="0.05 0.05 0.05" />
+    <map znear="0.01" zfar="80" />
+    <quality shadowsize="4096" />
+  </visual>
+  <asset>
+    <material name="rgb_100_062_000" rgba="0.3922 0.2431 0.0000 1" />
+    <mesh name="mesh_1区栅栏" file="field/fence_perimeter.obj" inertia="shell" />
+    <material name="rgb_170_210_230" rgba="0.6667 0.8235 0.9020 1" />
+    <mesh name="mesh_1区储存区-蓝" file="field/storage_blue.obj" inertia="shell" />
+    <material name="rgb_050_000_255" rgba="0.1961 0.0000 1.0000 1" />
+    <mesh name="mesh_1区启动区-蓝" file="field/start_blue.obj" inertia="shell" />
+    <material name="rgb_223_034_034" rgba="0.8745 0.1333 0.1333 1" />
+    <material name="rgb_240_210_210" rgba="0.9412 0.8235 0.8235 1" />
+    <mesh name="mesh_红1区" file="field/ground_red.obj" inertia="shell" />
+    <mesh name="mesh_蓝1区" file="field/ground_blue.obj" inertia="shell" />
+    <mesh name="mesh_1区启动区-红" file="field/start_red.obj" inertia="shell" />
+    <mesh name="mesh_1区储存区-红" file="field/storage_red.obj" inertia="shell" />
+    <material name="rgb_245_240_200" rgba="0.9608 0.9412 0.7843 1" />
+    <mesh name="mesh_1区-地面共享区" file="field/shared_area_south.obj" inertia="shell" />
+    <mesh name="mesh_1区-地面附加共享区" file="field/shared_area_north.obj" inertia="shell" />
+    <mesh name="mesh_1区-灵石基座" file="field/mustika_pillar.obj" inertia="shell" />
+    <material name="rgb_150_215_220" rgba="0.5882 0.8431 0.8627 1" />
+    <mesh name="mesh_蓝2区" file="field/l1_floor_blue.obj" inertia="shell" />
+    <mesh name="mesh_2区重试区-红" file="field/l1_retry_red.obj" inertia="shell" />
+    <material name="rgb_235_180_160" rgba="0.9216 0.7059 0.6275 1" />
+    <mesh name="mesh_台阶-红-阶梯" file="field/transition_red_stairs.obj" inertia="shell" />
+    <material name="rgb_245_170_060" rgba="0.9608 0.6667 0.2353 1" />
+    <mesh name="mesh_台阶-红-传递区" file="field/transition_red_transfer.obj" inertia="shell" />
+    <material name="rgb_200_150_140" rgba="0.7843 0.5882 0.5490 1" />
+    <mesh name="mesh_台阶-红-坡道" file="field/transition_red_ramp.obj" inertia="shell" />
+    <mesh name="mesh_2区重试区-蓝" file="field/l1_retry_blue.obj" inertia="shell" />
+    <material name="rgb_190_190_185" rgba="0.7451 0.7451 0.7255 1" />
+    <mesh name="mesh_二层基座" file="field/l1_platform.obj" inertia="shell" />
+    <mesh name="mesh_红2区" file="field/l1_floor_red.obj" inertia="shell" />
+    <material name="rgb_040_100_050" rgba="0.1569 0.3922 0.1961 1" />
+    <mesh name="mesh_建造点-1" file="field/build_spot_01.obj" inertia="shell" />
+    <mesh name="mesh_建造点-2" file="field/build_spot_02.obj" inertia="shell" />
+    <material name="rgb_218_165_032" rgba="0.8549 0.6471 0.1255 1" />
+    <mesh name="mesh_建造点-3" file="field/build_spot_03.obj" inertia="shell" />
+    <mesh name="mesh_台阶-蓝-阶梯" file="field/transition_blue_stairs.obj" inertia="shell" />
+    <material name="rgb_060_170_245" rgba="0.2353 0.6667 0.9608 1" />
+    <mesh name="mesh_台阶-蓝-传递区" file="field/transition_blue_transfer.obj" inertia="shell" />
+    <material name="rgb_130_180_200" rgba="0.5098 0.7059 0.7843 1" />
+    <mesh name="mesh_台阶-蓝-坡道" file="field/transition_blue_ramp.obj" inertia="shell" />
+    <mesh name="mesh_2区栅栏" file="field/l1_fence_perimeter.obj" inertia="shell" />
+    <mesh name="mesh_建造点-4" file="field/build_spot_04.obj" inertia="shell" />
+    <mesh name="mesh_建造点-5" file="field/build_spot_05.obj" inertia="shell" />
+    <mesh name="mesh_建造点-6" file="field/build_spot_06.obj" inertia="shell" />
+    <mesh name="mesh_建造点-7" file="field/build_spot_07.obj" inertia="shell" />
+    <mesh name="mesh_3区" file="field/l2_platform.obj" inertia="shell" />
+    <mesh name="mesh_二层台阶-红" file="field/l2_stairs_red.obj" inertia="shell" />
+    <mesh name="mesh_建造点-8" file="field/build_spot_08.obj" inertia="shell" />
+    <mesh name="mesh_二层台阶-蓝" file="field/l2_stairs_blue.obj" inertia="shell" />
+    <mesh name="mesh_3区-中央基座" file="field/central_pillar.obj" inertia="shell" />
+    <mesh name="mesh_建造点-9" file="field/build_spot_09.obj" inertia="shell" />
+    <mesh name="mesh_建造点-10" file="field/build_spot_10.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_01_red" file="objects/sky_block_01_red.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_01_blue" file="objects/sky_block_01_blue.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_02_red" file="objects/sky_block_02_red.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_02_blue" file="objects/sky_block_02_blue.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_03_red" file="objects/sky_block_03_red.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_03_blue" file="objects/sky_block_03_blue.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_04_red" file="objects/sky_block_04_red.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_04_blue" file="objects/sky_block_04_blue.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_05_red" file="objects/sky_block_05_red.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_05_blue" file="objects/sky_block_05_blue.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_06_red" file="objects/sky_block_06_red.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_06_blue" file="objects/sky_block_06_blue.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_07_red" file="objects/sky_block_07_red.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_07_blue" file="objects/sky_block_07_blue.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_08_red" file="objects/sky_block_08_red.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_08_blue" file="objects/sky_block_08_blue.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_09_red" file="objects/sky_block_09_red.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_09_blue" file="objects/sky_block_09_blue.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_10_red" file="objects/sky_block_10_red.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_10_blue" file="objects/sky_block_10_blue.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_11_red" file="objects/sky_block_11_red.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_11_blue" file="objects/sky_block_11_blue.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_12_red" file="objects/sky_block_12_red.obj" inertia="shell" />
+    <mesh name="mesh_skyblock_12_blue" file="objects/sky_block_12_blue.obj" inertia="shell" />
+    <mesh name="mesh_mustika" file="objects/mustika.obj" inertia="shell" />
+    <mesh name="mesh_earthblock" file="objects/earth_block.obj" inertia="shell" />
+  </asset>
+  <worldbody>
+    <light name="sun" pos="0 0 12" dir="0 0 -1" directional="true" castshadow="true" diffuse="0.55 0.55 0.55" specular="0.15 0.15 0.15" />
+    <camera name="camera_top" pos="0.00 0.00 12.00" quat="1 0 0 0" fovy="45" />   <!-- 相机-俯视（正上方向下，北在上） -->
+    <camera name="camera_sw" pos="-8.50 -8.50 6.50" xyaxes="0.707107 -0.707107 0.000000 0.324132 0.324132 0.888750" fovy="45" />   <!-- 相机-西南俯视 -->
+    <camera name="camera_south" pos="0.00 -9.50 3.20" xyaxes="1.000000 -0.000000 0.000000 0.000000 0.263976 0.964529" fovy="45" />   <!-- 相机-南向平视 -->
+    <geom name="1区栅栏" type="mesh" mesh="mesh_1区栅栏" material="rgb_100_062_000" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 1区栅栏（规则附录 1 配色） -->
+    </geom>
+    <geom name="1区储存区-蓝" type="mesh" mesh="mesh_1区储存区-蓝" material="rgb_050_000_255" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 1区储存区-蓝（规则附录 1 配色） -->
+    </geom>
+    <geom name="1区启动区-蓝" type="mesh" mesh="mesh_1区启动区-蓝" material="rgb_050_000_255" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 1区启动区-蓝（规则附录 1 配色） -->
+    </geom>
+    <geom name="红1区" type="mesh" mesh="mesh_红1区" material="rgb_240_210_210" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 红1区（规则附录 1 配色） -->
+    </geom>
+    <geom name="蓝1区" type="mesh" mesh="mesh_蓝1区" material="rgb_170_210_230" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 蓝1区（规则附录 1 配色） -->
+    </geom>
+    <geom name="1区启动区-红" type="mesh" mesh="mesh_1区启动区-红" material="rgb_223_034_034" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 1区启动区-红（规则附录 1 配色） -->
+    </geom>
+    <geom name="1区储存区-红" type="mesh" mesh="mesh_1区储存区-红" material="rgb_223_034_034" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 1区储存区-红（规则附录 1 配色） -->
+    </geom>
+    <geom name="1区-地面共享区" type="mesh" mesh="mesh_1区-地面共享区" material="rgb_245_240_200" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 1区-地面共享区（规则附录 1 配色） -->
+    </geom>
+    <geom name="1区-地面附加共享区" type="mesh" mesh="mesh_1区-地面附加共享区" material="rgb_245_240_200" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 1区-地面附加共享区（规则附录 1 配色） -->
+    </geom>
+    <geom name="1区-灵石基座" type="mesh" mesh="mesh_1区-灵石基座" material="rgb_100_062_000" pos="0 0 0" contype="0" conaffinity="0" />
+    <geom name="蓝2区" type="mesh" mesh="mesh_蓝2区" material="rgb_150_215_220" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 蓝2区（规则附录 1 配色） -->
+    </geom>
+    <geom name="2区重试区-红" type="mesh" mesh="mesh_2区重试区-红" material="rgb_223_034_034" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 2区重试区-红（规则附录 1 配色） -->
+    </geom>
+    <geom name="台阶-红-阶梯" type="mesh" mesh="mesh_台阶-红-阶梯" material="rgb_235_180_160" pos="-6.0000 -1.6000 0.0000" quat="0 0 0 1" contype="0" conaffinity="0">
+      <!-- 红方阶梯（规则 2.16/2.18；z∈[-1100,-200]） -->
+    </geom>
+    <geom name="台阶-红-传递区" type="mesh" mesh="mesh_台阶-红-传递区" material="rgb_245_170_060" pos="-6.0000 -1.6000 0.0000" quat="0 0 0 1" contype="0" conaffinity="0">
+      <!-- 红方传递区（规则 2.16/2.18；z∈[-200,800]） -->
+    </geom>
+    <geom name="台阶-红-坡道" type="mesh" mesh="mesh_台阶-红-坡道" material="rgb_200_150_140" pos="-6.0000 -1.6000 0.0000" quat="0 0 0 1" contype="0" conaffinity="0">
+      <!-- 红方坡道（规则 2.16/2.18；z∈[800,4300]） -->
+    </geom>
+    <geom name="2区重试区-蓝" type="mesh" mesh="mesh_2区重试区-蓝" material="rgb_050_000_255" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 2区重试区-蓝（规则附录 1 配色） -->
+    </geom>
+    <geom name="二层基座" type="mesh" mesh="mesh_二层基座" material="rgb_190_190_185" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 二层基座（规则附录 1 配色） -->
+    </geom>
+    <geom name="红2区" type="mesh" mesh="mesh_红2区" material="rgb_235_180_160" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 红2区（规则附录 1 配色） -->
+    </geom>
+    <geom name="建造点-1" type="mesh" mesh="mesh_建造点-1" material="rgb_040_100_050" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 建造点-1（规则附录 1 配色） -->
+    </geom>
+    <site name="site_建造点-1-1" type="box" size="0.25 0.25 0.0005" pos="0.0000 -2.7000 0.0030" rgba="0.16 0.39 0.2 0.85" />
+    <geom name="建造点-2" type="mesh" mesh="mesh_建造点-2" material="rgb_040_100_050" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 建造点-2（规则附录 1 配色） -->
+    </geom>
+    <site name="site_建造点-2-2" type="box" size="0.25 0.25 0.0005" pos="0.0000 2.7000 0.0030" rgba="0.16 0.39 0.2 0.85" />
+    <geom name="建造点-3" type="mesh" mesh="mesh_建造点-3" material="rgb_040_100_050" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 建造点-3（规则附录 1 配色） -->
+    </geom>
+    <site name="site_建造点-3-3" type="box" size="0.25 0.25 0.0005" pos="-2.7000 2.7000 0.0030" rgba="0.16 0.39 0.2 0.85" />
+    <geom name="台阶-蓝-阶梯" type="mesh" mesh="mesh_台阶-蓝-阶梯" material="rgb_150_215_220" pos="8.0000 -1.6000 0.0000" quat="0 0 0 1" contype="0" conaffinity="0">
+      <!-- 蓝方阶梯（规则 2.16/2.18；z∈[-1100,-200]） -->
+    </geom>
+    <geom name="台阶-蓝-传递区" type="mesh" mesh="mesh_台阶-蓝-传递区" material="rgb_060_170_245" pos="8.0000 -1.6000 0.0000" quat="0 0 0 1" contype="0" conaffinity="0">
+      <!-- 蓝方传递区（规则 2.16/2.18；z∈[-200,800]） -->
+    </geom>
+    <geom name="台阶-蓝-坡道" type="mesh" mesh="mesh_台阶-蓝-坡道" material="rgb_130_180_200" pos="8.0000 -1.6000 0.0000" quat="0 0 0 1" contype="0" conaffinity="0">
+      <!-- 蓝方坡道（规则 2.16/2.18；z∈[800,4300]） -->
+    </geom>
+    <geom name="2区栅栏" type="mesh" mesh="mesh_2区栅栏" material="rgb_190_190_185" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 2区栅栏（规则附录 1 配色） -->
+    </geom>
+    <geom name="建造点-4" type="mesh" mesh="mesh_建造点-4" material="rgb_040_100_050" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 建造点-4（规则附录 1 配色） -->
+    </geom>
+    <site name="site_建造点-4-4" type="box" size="0.25 0.25 0.0005" pos="2.7000 2.7000 0.0030" rgba="0.16 0.39 0.2 0.85" />
+    <geom name="建造点-5" type="mesh" mesh="mesh_建造点-5" material="rgb_040_100_050" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 建造点-5（规则附录 1 配色） -->
+    </geom>
+    <site name="site_建造点-5-5" type="box" size="0.25 0.25 0.0005" pos="-1.2500 1.2500 0.0030" rgba="0.16 0.39 0.2 0.85" />
+    <geom name="建造点-6" type="mesh" mesh="mesh_建造点-6" material="rgb_040_100_050" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 建造点-6（规则附录 1 配色） -->
+    </geom>
+    <site name="site_建造点-6-6" type="box" size="0.25 0.25 0.0005" pos="1.2500 1.2500 0.0030" rgba="0.16 0.39 0.2 0.85" />
+    <geom name="建造点-7" type="mesh" mesh="mesh_建造点-7" material="rgb_040_100_050" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 建造点-7（规则附录 1 配色） -->
+    </geom>
+    <site name="site_建造点-7-7" type="box" size="0.25 0.25 0.0005" pos="-2.7000 -2.7000 0.0030" rgba="0.16 0.39 0.2 0.85" />
+    <geom name="3区" type="mesh" mesh="mesh_3区" material="rgb_190_190_185" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 3区（规则附录 1 配色） -->
+    </geom>
+    <geom name="二层台阶-红" type="mesh" mesh="mesh_二层台阶-红" material="rgb_235_180_160" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 二层台阶-红（规则附录 1 配色） -->
+    </geom>
+    <geom name="建造点-8" type="mesh" mesh="mesh_建造点-8" material="rgb_040_100_050" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 建造点-8（规则附录 1 配色） -->
+    </geom>
+    <site name="site_建造点-8-8" type="box" size="0.25 0.25 0.0005" pos="-1.2500 -1.2500 0.0030" rgba="0.16 0.39 0.2 0.85" />
+    <geom name="二层台阶-蓝" type="mesh" mesh="mesh_二层台阶-蓝" material="rgb_150_215_220" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 二层台阶-蓝（规则附录 1 配色） -->
+    </geom>
+    <geom name="3区-中央基座" type="mesh" mesh="mesh_3区-中央基座" material="rgb_100_062_000" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 3区-中央基座（规则附录 1 配色） -->
+    </geom>
+    <geom name="建造点-9" type="mesh" mesh="mesh_建造点-9" material="rgb_040_100_050" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 建造点-9（规则附录 1 配色） -->
+    </geom>
+    <site name="site_建造点-9-9" type="box" size="0.25 0.25 0.0005" pos="1.2500 -1.2500 0.0030" rgba="0.16 0.39 0.2 0.85" />
+    <geom name="建造点-10" type="mesh" mesh="mesh_建造点-10" material="rgb_040_100_050" pos="0 0 0" contype="0" conaffinity="0">
+      <!-- 建造点-10（规则附录 1 配色） -->
+    </geom>
+    <site name="site_建造点-10-10" type="box" size="0.25 0.25 0.0005" pos="2.7000 -2.7000 0.0030" rgba="0.16 0.39 0.2 0.85" />
+    <geom name="col_ground" type="box" size="10 10 0.025" pos="0.0000 0.0000 0.0000" rgba="1 1 1 0" />
+    <geom name="col_l1" type="box" size="3 3 0.3" pos="0.0000 0.0000 0.3250" rgba="1 1 1 0" />
+    <geom name="col_l2" type="box" size="1.5 1.5 0.15" pos="0.0000 0.0000 0.7750" rgba="1 1 1 0" />
+    <geom name="col_fence_n" type="box" size="5.55 0.025 0.05" pos="0.0000 5.5250 0.0750" rgba="1 1 1 0" />
+    <geom name="col_fence_s" type="box" size="5.55 0.025 0.05" pos="0.0000 -5.5250 0.0750" rgba="1 1 1 0" />
+    <geom name="col_fence_e" type="box" size="0.025 5.55 0.05" pos="5.5250 0.0000 0.0750" rgba="1 1 1 0" />
+    <geom name="col_fence_w" type="box" size="0.025 5.55 0.05" pos="-5.5250 0.0000 0.0750" rgba="1 1 1 0" />
+    <geom name="col_l1fence_n" type="box" size="3 0.025 0.05" pos="0.0000 2.9750 0.6750" rgba="1 1 1 0" />
+    <geom name="col_l1fence_s" type="box" size="3 0.025 0.05" pos="0.0000 -2.9750 0.6750" rgba="1 1 1 0" />
+    <geom name="col_l1fence_e" type="box" size="0.025 2.95 0.05" pos="2.9750 0.0000 0.6750" rgba="1 1 1 0" />
+    <geom name="col_l1fence_w" type="box" size="0.025 2.95 0.05" pos="-2.9750 0.0000 0.6750" rgba="1 1 1 0" />
+    <geom name="col_band_red_plat" type="box" size="0.5 0.5 0.3" pos="-3.5000 -1.3000 0.3250" rgba="1 1 1 0" />
+    <geom name="col_band_red_step1" type="box" size="0.5 0.15 0.075" pos="-3.5000 -2.5500 0.0875" rgba="1 1 1 0" />
+    <geom name="col_band_red_step2" type="box" size="0.5 0.15 0.1625" pos="-3.5000 -2.2500 0.1625" rgba="1 1 1 0" />
+    <geom name="col_band_red_step3" type="box" size="0.5 0.15 0.2375" pos="-3.5000 -1.9500 0.2375" rgba="1 1 1 0" />
+    <geom name="col_band_blue_plat" type="box" size="0.5 0.5 0.3" pos="3.5000 -1.3000 0.3250" rgba="1 1 1 0" />
+    <geom name="col_band_blue_step1" type="box" size="0.5 0.15 0.075" pos="3.5000 -2.5500 0.0875" rgba="1 1 1 0" />
+    <geom name="col_band_blue_step2" type="box" size="0.5 0.15 0.1625" pos="3.5000 -2.2500 0.1625" rgba="1 1 1 0" />
+    <geom name="col_band_blue_step3" type="box" size="0.5 0.15 0.2375" pos="3.5000 -1.9500 0.2375" rgba="1 1 1 0" />
+    <geom name="col_band_blue_ramp" type="box" size="0.5 1.7755 0.025" pos="3.5000 0.9460 0.3004" quat="0.996399 -0.084787 0 0" rgba="1 1 1 0" />
+    <geom name="col_l2stair_red" type="box" size="0.15 0.5 0.075" pos="-1.6500 0.0000 0.7000" rgba="1 1 1 0" />
+    <geom name="col_l2stair_blue" type="box" size="0.15 0.5 0.075" pos="1.6500 0.0000 0.7000" rgba="1 1 1 0" />
+    <geom name="col_pillar_centre" type="cylinder" size="0.135 0.4" pos="0 0 1.325" rgba="1 1 1 0" />
+    <geom name="mustika_pillar_col" type="cylinder" size="0.135 0.2" pos="0 4.25 0.225" rgba="1 1 1 0" />
+      <geom name="pillar_ring_00" type="box" size="0.0242 0.0226 0.05" pos="0.1125 4.2500 0.475" quat="1.000000 0 0 0.000000" rgba="1 1 1 0" />
+      <geom name="pillar_ring_01" type="box" size="0.0242 0.0226 0.05" pos="0.0974 4.3063 0.475" quat="0.965926 0 0 0.258819" rgba="1 1 1 0" />
+      <geom name="pillar_ring_02" type="box" size="0.0242 0.0226 0.05" pos="0.0563 4.3474 0.475" quat="0.866025 0 0 0.500000" rgba="1 1 1 0" />
+      <geom name="pillar_ring_03" type="box" size="0.0242 0.0226 0.05" pos="0.0000 4.3625 0.475" quat="0.707107 0 0 0.707107" rgba="1 1 1 0" />
+      <geom name="pillar_ring_04" type="box" size="0.0242 0.0226 0.05" pos="-0.0562 4.3474 0.475" quat="0.500000 0 0 0.866025" rgba="1 1 1 0" />
+      <geom name="pillar_ring_05" type="box" size="0.0242 0.0226 0.05" pos="-0.0974 4.3063 0.475" quat="0.258819 0 0 0.965926" rgba="1 1 1 0" />
+      <geom name="pillar_ring_06" type="box" size="0.0242 0.0226 0.05" pos="-0.1125 4.2500 0.475" quat="0.000000 0 0 1.000000" rgba="1 1 1 0" />
+      <geom name="pillar_ring_07" type="box" size="0.0242 0.0226 0.05" pos="-0.0974 4.1937 0.475" quat="-0.258819 0 0 0.965926" rgba="1 1 1 0" />
+      <geom name="pillar_ring_08" type="box" size="0.0242 0.0226 0.05" pos="-0.0563 4.1526 0.475" quat="-0.500000 0 0 0.866025" rgba="1 1 1 0" />
+      <geom name="pillar_ring_09" type="box" size="0.0242 0.0226 0.05" pos="-0.0000 4.1375 0.475" quat="-0.707107 0 0 0.707107" rgba="1 1 1 0" />
+      <geom name="pillar_ring_10" type="box" size="0.0242 0.0226 0.05" pos="0.0563 4.1526 0.475" quat="-0.866025 0 0 0.500000" rgba="1 1 1 0" />
+      <geom name="pillar_ring_11" type="box" size="0.0242 0.0226 0.05" pos="0.0974 4.1937 0.475" quat="-0.965926 0 0 0.258819" rgba="1 1 1 0" />
+    <body name="skyblock_01" pos="0.4667 -4.7155 0.1261">
+      <freejoint name="skyblock_01_joint" />
+      <inertial pos="0 0 0" mass="0.22" diaginertia="0.00147 0.00147 0.00147" />
+      <geom name="skyblock_01_col" type="box" size="0.1 0.1 0.1" rgba="1 1 1 0" />
+      <geom name="skyblock_01_vis_r" type="mesh" mesh="mesh_skyblock_01_red" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+      <geom name="skyblock_01_vis_b" type="mesh" mesh="mesh_skyblock_01_blue" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="skyblock_02" pos="0.0000 -4.7155 0.1261">
+      <freejoint name="skyblock_02_joint" />
+      <inertial pos="0 0 0" mass="0.22" diaginertia="0.00147 0.00147 0.00147" />
+      <geom name="skyblock_02_col" type="box" size="0.1 0.1 0.1" rgba="1 1 1 0" />
+      <geom name="skyblock_02_vis_r" type="mesh" mesh="mesh_skyblock_02_red" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+      <geom name="skyblock_02_vis_b" type="mesh" mesh="mesh_skyblock_02_blue" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="skyblock_03" pos="-0.4667 -4.7155 0.1261">
+      <freejoint name="skyblock_03_joint" />
+      <inertial pos="0 0 0" mass="0.22" diaginertia="0.00147 0.00147 0.00147" />
+      <geom name="skyblock_03_col" type="box" size="0.1 0.1 0.1" rgba="1 1 1 0" />
+      <geom name="skyblock_03_vis_r" type="mesh" mesh="mesh_skyblock_03_red" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+      <geom name="skyblock_03_vis_b" type="mesh" mesh="mesh_skyblock_03_blue" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="skyblock_04" pos="-0.2333 -4.4821 0.1261">
+      <freejoint name="skyblock_04_joint" />
+      <inertial pos="0 0 0" mass="0.22" diaginertia="0.00147 0.00147 0.00147" />
+      <geom name="skyblock_04_col" type="box" size="0.1 0.1 0.1" rgba="1 1 1 0" />
+      <geom name="skyblock_04_vis_r" type="mesh" mesh="mesh_skyblock_04_red" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+      <geom name="skyblock_04_vis_b" type="mesh" mesh="mesh_skyblock_04_blue" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="skyblock_05" pos="0.2333 -4.4821 0.1261">
+      <freejoint name="skyblock_05_joint" />
+      <inertial pos="0 0 0" mass="0.22" diaginertia="0.00147 0.00147 0.00147" />
+      <geom name="skyblock_05_col" type="box" size="0.1 0.1 0.1" rgba="1 1 1 0" />
+      <geom name="skyblock_05_vis_r" type="mesh" mesh="mesh_skyblock_05_red" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+      <geom name="skyblock_05_vis_b" type="mesh" mesh="mesh_skyblock_05_blue" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="skyblock_06" pos="-0.4667 -4.2488 0.1261">
+      <freejoint name="skyblock_06_joint" />
+      <inertial pos="0 0 0" mass="0.22" diaginertia="0.00147 0.00147 0.00147" />
+      <geom name="skyblock_06_col" type="box" size="0.1 0.1 0.1" rgba="1 1 1 0" />
+      <geom name="skyblock_06_vis_r" type="mesh" mesh="mesh_skyblock_06_red" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+      <geom name="skyblock_06_vis_b" type="mesh" mesh="mesh_skyblock_06_blue" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="skyblock_07" pos="0.4667 -4.2488 0.1261">
+      <freejoint name="skyblock_07_joint" />
+      <inertial pos="0 0 0" mass="0.22" diaginertia="0.00147 0.00147 0.00147" />
+      <geom name="skyblock_07_col" type="box" size="0.1 0.1 0.1" rgba="1 1 1 0" />
+      <geom name="skyblock_07_vis_r" type="mesh" mesh="mesh_skyblock_07_red" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+      <geom name="skyblock_07_vis_b" type="mesh" mesh="mesh_skyblock_07_blue" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="skyblock_08" pos="-0.2333 -4.0155 0.1261">
+      <freejoint name="skyblock_08_joint" />
+      <inertial pos="0 0 0" mass="0.22" diaginertia="0.00147 0.00147 0.00147" />
+      <geom name="skyblock_08_col" type="box" size="0.1 0.1 0.1" rgba="1 1 1 0" />
+      <geom name="skyblock_08_vis_r" type="mesh" mesh="mesh_skyblock_08_red" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+      <geom name="skyblock_08_vis_b" type="mesh" mesh="mesh_skyblock_08_blue" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="skyblock_09" pos="0.2333 -4.0155 0.1261">
+      <freejoint name="skyblock_09_joint" />
+      <inertial pos="0 0 0" mass="0.22" diaginertia="0.00147 0.00147 0.00147" />
+      <geom name="skyblock_09_col" type="box" size="0.1 0.1 0.1" rgba="1 1 1 0" />
+      <geom name="skyblock_09_vis_r" type="mesh" mesh="mesh_skyblock_09_red" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+      <geom name="skyblock_09_vis_b" type="mesh" mesh="mesh_skyblock_09_blue" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="skyblock_10" pos="0.4667 -3.7821 0.1261">
+      <freejoint name="skyblock_10_joint" />
+      <inertial pos="0 0 0" mass="0.22" diaginertia="0.00147 0.00147 0.00147" />
+      <geom name="skyblock_10_col" type="box" size="0.1 0.1 0.1" rgba="1 1 1 0" />
+      <geom name="skyblock_10_vis_r" type="mesh" mesh="mesh_skyblock_10_red" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+      <geom name="skyblock_10_vis_b" type="mesh" mesh="mesh_skyblock_10_blue" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="skyblock_11" pos="0.0000 -3.7821 0.1261">
+      <freejoint name="skyblock_11_joint" />
+      <inertial pos="0 0 0" mass="0.22" diaginertia="0.00147 0.00147 0.00147" />
+      <geom name="skyblock_11_col" type="box" size="0.1 0.1 0.1" rgba="1 1 1 0" />
+      <geom name="skyblock_11_vis_r" type="mesh" mesh="mesh_skyblock_11_red" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+      <geom name="skyblock_11_vis_b" type="mesh" mesh="mesh_skyblock_11_blue" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="skyblock_12" pos="-0.4667 -3.7821 0.1261">
+      <freejoint name="skyblock_12_joint" />
+      <inertial pos="0 0 0" mass="0.22" diaginertia="0.00147 0.00147 0.00147" />
+      <geom name="skyblock_12_col" type="box" size="0.1 0.1 0.1" rgba="1 1 1 0" />
+      <geom name="skyblock_12_vis_r" type="mesh" mesh="mesh_skyblock_12_red" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+      <geom name="skyblock_12_vis_b" type="mesh" mesh="mesh_skyblock_12_blue" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="mustika" pos="0.0000 4.2500 0.5697">
+      <freejoint name="mustika_joint" />
+      <inertial pos="0 0 0" mass="0.27" diaginertia="0.00108 0.00108 0.00108" />
+      <geom name="mustika_col" type="sphere" size="0.1" rgba="1 1 1 0" />
+      <geom name="mustika_vis" type="mesh" mesh="mesh_mustika" material="rgb_218_165_032" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_red_01" pos="-5.2200 5.9300 0.2005">
+      <freejoint name="earthblock_red_01_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_red_01_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_red_01_vis" type="mesh" mesh="mesh_earthblock" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_red_02" pos="-5.2200 5.9300 0.5510">
+      <freejoint name="earthblock_red_02_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_red_02_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_red_02_vis" type="mesh" mesh="mesh_earthblock" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_red_03" pos="-4.8600 5.9300 0.2005">
+      <freejoint name="earthblock_red_03_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_red_03_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_red_03_vis" type="mesh" mesh="mesh_earthblock" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_red_04" pos="-4.8600 5.9300 0.5510">
+      <freejoint name="earthblock_red_04_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_red_04_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_red_04_vis" type="mesh" mesh="mesh_earthblock" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_red_05" pos="-4.5000 5.9300 0.2005">
+      <freejoint name="earthblock_red_05_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_red_05_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_red_05_vis" type="mesh" mesh="mesh_earthblock" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_red_06" pos="-4.5000 5.9300 0.5510">
+      <freejoint name="earthblock_red_06_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_red_06_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_red_06_vis" type="mesh" mesh="mesh_earthblock" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_red_07" pos="-4.1400 5.9300 0.2005">
+      <freejoint name="earthblock_red_07_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_red_07_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_red_07_vis" type="mesh" mesh="mesh_earthblock" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_red_08" pos="-4.1400 5.9300 0.5510">
+      <freejoint name="earthblock_red_08_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_red_08_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_red_08_vis" type="mesh" mesh="mesh_earthblock" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_red_09" pos="-3.7800 5.9300 0.2005">
+      <freejoint name="earthblock_red_09_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_red_09_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_red_09_vis" type="mesh" mesh="mesh_earthblock" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_red_10" pos="-3.7800 5.9300 0.5510">
+      <freejoint name="earthblock_red_10_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_red_10_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_red_10_vis" type="mesh" mesh="mesh_earthblock" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_red_11" pos="-5.2200 6.2900 0.2005">
+      <freejoint name="earthblock_red_11_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_red_11_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_red_11_vis" type="mesh" mesh="mesh_earthblock" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_red_12" pos="-5.2200 6.2900 0.5510">
+      <freejoint name="earthblock_red_12_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_red_12_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_red_12_vis" type="mesh" mesh="mesh_earthblock" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_red_13" pos="-4.8600 6.2900 0.2005">
+      <freejoint name="earthblock_red_13_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_red_13_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_red_13_vis" type="mesh" mesh="mesh_earthblock" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_red_14" pos="-4.8600 6.2900 0.5510">
+      <freejoint name="earthblock_red_14_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_red_14_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_red_14_vis" type="mesh" mesh="mesh_earthblock" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_red_15" pos="-4.5000 6.2900 0.2005">
+      <freejoint name="earthblock_red_15_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_red_15_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_red_15_vis" type="mesh" mesh="mesh_earthblock" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_red_16" pos="-4.5000 6.2900 0.5510">
+      <freejoint name="earthblock_red_16_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_red_16_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_red_16_vis" type="mesh" mesh="mesh_earthblock" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_red_17" pos="-4.1400 6.2900 0.2005">
+      <freejoint name="earthblock_red_17_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_red_17_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_red_17_vis" type="mesh" mesh="mesh_earthblock" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_red_18" pos="-4.1400 6.2900 0.5510">
+      <freejoint name="earthblock_red_18_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_red_18_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_red_18_vis" type="mesh" mesh="mesh_earthblock" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_red_19" pos="-3.7800 6.2900 0.2005">
+      <freejoint name="earthblock_red_19_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_red_19_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_red_19_vis" type="mesh" mesh="mesh_earthblock" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_red_20" pos="-3.7800 6.2900 0.5510">
+      <freejoint name="earthblock_red_20_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_red_20_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_red_20_vis" type="mesh" mesh="mesh_earthblock" material="rgb_223_034_034" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_blue_01" pos="3.7800 5.9300 0.2005">
+      <freejoint name="earthblock_blue_01_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_blue_01_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_blue_01_vis" type="mesh" mesh="mesh_earthblock" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_blue_02" pos="3.7800 5.9300 0.5510">
+      <freejoint name="earthblock_blue_02_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_blue_02_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_blue_02_vis" type="mesh" mesh="mesh_earthblock" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_blue_03" pos="4.1400 5.9300 0.2005">
+      <freejoint name="earthblock_blue_03_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_blue_03_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_blue_03_vis" type="mesh" mesh="mesh_earthblock" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_blue_04" pos="4.1400 5.9300 0.5510">
+      <freejoint name="earthblock_blue_04_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_blue_04_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_blue_04_vis" type="mesh" mesh="mesh_earthblock" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_blue_05" pos="4.5000 5.9300 0.2005">
+      <freejoint name="earthblock_blue_05_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_blue_05_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_blue_05_vis" type="mesh" mesh="mesh_earthblock" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_blue_06" pos="4.5000 5.9300 0.5510">
+      <freejoint name="earthblock_blue_06_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_blue_06_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_blue_06_vis" type="mesh" mesh="mesh_earthblock" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_blue_07" pos="4.8600 5.9300 0.2005">
+      <freejoint name="earthblock_blue_07_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_blue_07_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_blue_07_vis" type="mesh" mesh="mesh_earthblock" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_blue_08" pos="4.8600 5.9300 0.5510">
+      <freejoint name="earthblock_blue_08_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_blue_08_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_blue_08_vis" type="mesh" mesh="mesh_earthblock" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_blue_09" pos="5.2200 5.9300 0.2005">
+      <freejoint name="earthblock_blue_09_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_blue_09_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_blue_09_vis" type="mesh" mesh="mesh_earthblock" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_blue_10" pos="5.2200 5.9300 0.5510">
+      <freejoint name="earthblock_blue_10_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_blue_10_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_blue_10_vis" type="mesh" mesh="mesh_earthblock" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_blue_11" pos="3.7800 6.2900 0.2005">
+      <freejoint name="earthblock_blue_11_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_blue_11_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_blue_11_vis" type="mesh" mesh="mesh_earthblock" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_blue_12" pos="3.7800 6.2900 0.5510">
+      <freejoint name="earthblock_blue_12_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_blue_12_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_blue_12_vis" type="mesh" mesh="mesh_earthblock" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_blue_13" pos="4.1400 6.2900 0.2005">
+      <freejoint name="earthblock_blue_13_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_blue_13_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_blue_13_vis" type="mesh" mesh="mesh_earthblock" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_blue_14" pos="4.1400 6.2900 0.5510">
+      <freejoint name="earthblock_blue_14_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_blue_14_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_blue_14_vis" type="mesh" mesh="mesh_earthblock" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_blue_15" pos="4.5000 6.2900 0.2005">
+      <freejoint name="earthblock_blue_15_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_blue_15_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_blue_15_vis" type="mesh" mesh="mesh_earthblock" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_blue_16" pos="4.5000 6.2900 0.5510">
+      <freejoint name="earthblock_blue_16_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_blue_16_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_blue_16_vis" type="mesh" mesh="mesh_earthblock" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_blue_17" pos="4.8600 6.2900 0.2005">
+      <freejoint name="earthblock_blue_17_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_blue_17_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_blue_17_vis" type="mesh" mesh="mesh_earthblock" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_blue_18" pos="4.8600 6.2900 0.5510">
+      <freejoint name="earthblock_blue_18_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_blue_18_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_blue_18_vis" type="mesh" mesh="mesh_earthblock" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_blue_19" pos="5.2200 6.2900 0.2005">
+      <freejoint name="earthblock_blue_19_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_blue_19_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_blue_19_vis" type="mesh" mesh="mesh_earthblock" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="earthblock_blue_20" pos="5.2200 6.2900 0.5510">
+      <freejoint name="earthblock_blue_20_joint" />
+      <inertial pos="0 0 0" mass="0.6" diaginertia="0.01225 0.01225 0.01225" />
+      <geom name="earthblock_blue_20_col" type="box" size="0.175 0.175 0.175" rgba="1 1 1 0" />
+      <geom name="earthblock_blue_20_vis" type="mesh" mesh="mesh_earthblock" material="rgb_050_000_255" contype="0" conaffinity="0" group="2" />
+    </body>
+  </worldbody>
+</mujoco>
