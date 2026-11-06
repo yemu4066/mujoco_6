@@ -1,0 +1,62 @@
+# mujoco_6 开发容器
+#
+# ⚠️ 同一时间只能跑一个本镜像的容器：
+#    两个容器都会起 rmw_zenohd，抢 7447 端口。
+#    切换前先 `docker stop` 另一个。
+#
+# ⚠️ 如果已经有一个同名容器在跑（比如手动 docker run 起的），
+#    `docker compose up` 会报 "container name already in use"。
+#    先删掉：docker rm -f mujoco_6
+
+services:
+  nav-service:
+    image: elainasuki/rc2026:mujoco
+    container_name: ${DEVCONTAINER_NAME:-mujoco_6}
+
+    environment:
+      # ---- 图形 ----
+      # 不要设 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libGL.so.1：
+      # 这个镜像的 libGL 在 /opt/conda/lib 下，宿主路径不存在。
+      - DISPLAY=${DISPLAY}
+      - MUJOCO_GL=glfw
+      - LIBGL_ALWAYS_SOFTWARE=1
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+
+      # ---- ROS ----
+      # 这两个必须和容器内其他节点一致，否则互相看不见。
+      - RMW_IMPLEMENTATION=rmw_zenoh_cpp
+      - ROS_LOCALHOST_ONLY=1
+      - OMP_WAIT_POLICY=passive
+      - TERM=xterm-256color
+
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - /dev:/dev
+      # .devcontainer/ 的上一级 = mujoco_6/，挂到容器工作区
+      - ./..:/home/Elaina/ros2_ws
+
+    tty: true
+    stdin_open: true
+
+    # host 网络：DDS 发现最简单，也避免 7447 端口映射
+    network_mode: "host"
+
+    # 故意不开 pid: host —— 开了之后容器内 pkill 会杀掉宿主进程
+    user: 'Elaina'
+    privileged: true
+
+    entrypoint:
+      - /bin/bash
+      - -i
+      - -c
+      - |
+        if pgrep -x 'rmw_zenohd' >/dev/null; then
+          echo '[zenoh] rmw_zenohd already running'
+          exec sleep infinity
+        else
+          echo '[zenoh] starting rmw_zenohd...'
+          exec ros2 run rmw_zenoh_cpp rmw_zenohd
+        fi
+
+    working_dir: /home/Elaina/ros2_ws

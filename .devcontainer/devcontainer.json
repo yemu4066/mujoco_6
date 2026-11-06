@@ -1,0 +1,24 @@
+{
+  "name": "mujoco_6",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "nav-service",
+  "workspaceFolder": "/home/Elaina/ros2_ws",
+  "shutdownAction": "stopCompose",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-iot.vscode-ros"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/opt/conda/bin/python3",
+        "python.analysis.extraPaths": ["/home/Elaina/ros2_ws"],
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+
+  "postCreateCommand": "sudo apt-get update -qq && sudo apt-get install -y -qq libgl1 libglx-mesa0 libgl1-mesa-dri libegl1 libegl-mesa0 && echo '[mujoco_6] Mesa 已安装，可以跑仿真了'"
+}
