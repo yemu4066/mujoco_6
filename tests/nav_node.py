@@ -28,6 +28,7 @@ import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry, OccupancyGrid, Path
+from sensor_msgs.msg import LaserScan
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
@@ -36,6 +37,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
 
 from nav import Navigation                      # noqa: E402
+from nav_interfaces.msg import ObstacleArray    # noqa: E402
 
 
 def yaw_of(q) -> float:
@@ -61,12 +63,24 @@ class NavNode(Node):
 
         self.create_subscription(PoseStamped, '/goal_pose', self._on_goal, 10)
         self.create_subscription(Odometry, '/odom', self._on_odom, 20)
+        # 真机：激光雷达（MS200 等 2D 单线）
+        self.create_subscription(LaserScan, 'scan', self._on_scan, 10)
+        # 仿真：障碍真值（没有雷达时用它测避障逻辑）
+        self.create_subscription(ObstacleArray, '/obstacles', self._on_obstacles, 10)
 
         self.pose = None
-        self._publish_costmap()
+        self._scan_logged = False
+        self._has_scan = False
+        self._map_msg = self._build_costmap()
+        # 周期性重发：Foxglove 默认用 VOLATILE 订阅，晚连上收不到
+        # 启动时发的那一条 TRANSIENT_LOCAL 历史消息，所以隔一秒再发一次。
+        self.create_timer(1.0, lambda: self.map_pub.publish(self._map_msg))
+        self.get_logger().info(
+            f'/costmap {self._map_msg.info.width}x{self._map_msg.info.height}，'
+            f'自由格 {int((self.nav.costmap.data == 0).sum())}')
         self.get_logger().info('就绪：发 /goal_pose 即可')
 
-    def _publish_costmap(self) -> None:
+    def _build_costmap(self) -> OccupancyGrid:
         cm = self.nav.costmap
         spec = cm.spec
         grid = OccupancyGrid()
@@ -80,9 +94,7 @@ class NavNode(Node):
         # 地图行序：第 0 行是 y 最小
         data = (cm.data.astype(np.int32) * 100 // 254)
         grid.data = data.ravel().tolist()
-        self.map_pub.publish(grid)
-        self.get_logger().info(
-            f'/costmap 已发布 {spec.width}x{spec.height}，自由格 {int((cm.data == 0).sum())}')
+        return grid
 
     def _on_goal(self, msg: PoseStamped) -> None:
         if self.pose is None:
@@ -113,6 +125,33 @@ class NavNode(Node):
                 p.poses.append(ps)
             self.plan_pub.publish(p)
             self.get_logger().info(f'/plan 已发布 {len(path)} 点')
+
+    def _on_scan(self, msg: LaserScan) -> None:
+        """真机激光雷达：原样交给库处理（库内部做坐标转换）。"""
+        self.nav.set_scan(msg)
+        self._has_scan = True
+        if not self._scan_logged:
+            self._scan_logged = True
+            self.get_logger().info(
+                f'收到激光：{len(msg.ranges)} 点，'
+                f'{math.degrees(msg.angle_min):.0f}°~'
+                f'{math.degrees(msg.angle_min + msg.angle_increment * len(msg.ranges)):.0f}°')
+
+    def _on_obstacles(self, msg: ObstacleArray) -> None:
+        """仿真障碍真值：转成世界坐标点喂给库（仅在没雷达时用）。"""
+        if self._has_scan:
+            return          # 有真雷达就不看仿真障碍
+        pts = []
+        for obs in msg.obstacles:
+            if obs.confidence < 0.5:
+                continue
+            r = max(0.05, float(obs.radius))
+            # 圆周采样，近似一个圆
+            for a in np.linspace(0, 2 * math.pi, 16, endpoint=False):
+                pts.append((obs.position.x + r * math.cos(a),
+                            obs.position.y + r * math.sin(a)))
+        if pts:
+            self.nav.set_obstacle_points(pts)
 
     def _on_odom(self, msg: Odometry) -> None:
         p = msg.pose.pose.position
