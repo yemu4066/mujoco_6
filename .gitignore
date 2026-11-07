@@ -17,6 +17,7 @@ log/
 src/
 
 # 编辑器 / 系统
-.vscode/
+.vscode/*
+!.vscode/tasks.json
 .idea/
 .DS_Store

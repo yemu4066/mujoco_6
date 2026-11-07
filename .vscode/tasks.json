@@ -1,0 +1,49 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "▶ 启动仿真 + 导航",
+      "type": "shell",
+      "command": "bash tests/start_all.sh",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "■ 停止全部",
+      "type": "shell",
+      "command": "bash tests/start_all.sh stop",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "◎ 查看状态",
+      "type": "shell",
+      "command": "bash tests/start_all.sh status",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "✓ 自检（纯库，不需要仿真）",
+      "type": "shell",
+      "command": "python3 tests/selftest.py",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    }
+  ]
+}

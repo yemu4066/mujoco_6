@@ -4,7 +4,6 @@
   "service": "nav-service",
   "workspaceFolder": "/home/Elaina/ros2_ws",
   "shutdownAction": "stopCompose",
-
   "customizations": {
     "vscode": {
       "extensions": [
@@ -14,11 +13,12 @@
       ],
       "settings": {
         "python.defaultInterpreterPath": "/opt/conda/bin/python3",
-        "python.analysis.extraPaths": ["/home/Elaina/ros2_ws"],
+        "python.analysis.extraPaths": [
+          "/home/Elaina/ros2_ws"
+        ],
         "terminal.integrated.defaultProfile.linux": "bash"
       }
     }
   },
-
-  "postCreateCommand": "sudo apt-get update -qq && sudo apt-get install -y -qq libgl1 libglx-mesa0 libgl1-mesa-dri libegl1 libegl-mesa0 && echo '[mujoco_6] Mesa 已安装，可以跑仿真了'"
+  "postCreateCommand": "sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libglx-mesa0 libegl1 libgbm1 libgl1 && echo '[mujoco_6] Mesa 就绪'"
 }
