@@ -294,7 +294,11 @@ class Navigation:
         return cost
 
     def _obstacle_blocks_path(self) -> bool:
-        """动态障碍是否落在「当前位置之后」的路径附近。"""
+        """动态障碍是否挡在「车当前位置之后」的路径上。
+
+        不能用「看路径后半段」这种近似 —— 障碍挂在 1/3 处时会漏掉。
+        正确做法是把车投影到路径上取弧长 s0，只看 s >= s0 的那部分。
+        """
         if self._dynamic_points is None or len(self._dynamic_points) == 0:
             return False
 
@@ -303,13 +307,18 @@ class Navigation:
             return False
 
         path = np.column_stack([end.x_path, end.y_path])
-        # 只检查路径后半段（已经走过的部分不用管）
-        half = path[len(path) // 2:]
-        threshold = self._inscribed_cells * self.costmap.spec.resolution * 1.5
 
-        # 每个障碍点到最近路径点的距离
+        # 只保留还没走过的那段
+        if self._last_pose is not None and len(end.s_samples) == len(path):
+            s0 = end.get_nearest_s(self._last_pose[0], self._last_pose[1])
+            idx = int(np.searchsorted(end.s_samples, s0))
+            path = path[max(0, idx - 1):]
+        if len(path) == 0:
+            return False
+
+        threshold = self._inscribed_cells * self.costmap.spec.resolution * 1.5
         for p in self._dynamic_points:
-            d = np.hypot(half[:, 0] - p[0], half[:, 1] - p[1]).min()
+            d = np.hypot(path[:, 0] - p[0], path[:, 1] - p[1]).min()
             if d < threshold:
                 return True
         return False
