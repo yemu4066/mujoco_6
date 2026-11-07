@@ -1,13 +1,17 @@
-"""单独启动 MuJoCo 仿真桥（不含导航）。
+"""启动 MuJoCo 仿真桥，可选一并起导航。
 
-通常直接用 nav_bringup 的 bringup.launch.py；
-这个文件用于只调仿真、不想起导航的场合。
+默认 `use_nav:=true`，会同时启动 `tests/nav_node.py`，
+这样 Foxglove 一连上就能看到 /costmap、/plan，不需要再手动开第二个终端。
+
+只调仿真、不想要导航时：
+
+    ros2 launch mujoco_ros2_bridge bridge.launch.py use_nav:=false
 """
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -21,6 +25,8 @@ def generate_launch_description() -> LaunchDescription:
     scene = LaunchConfiguration('scene')
     use_viewer = LaunchConfiguration('use_viewer')
     use_foxglove = LaunchConfiguration('use_foxglove')
+    use_nav = LaunchConfiguration('use_nav')
+    workspace = LaunchConfiguration('workspace')
 
     return LaunchDescription([
         DeclareLaunchArgument('scene', default_value='rc2027/scene_nav.xml',
@@ -29,6 +35,12 @@ def generate_launch_description() -> LaunchDescription:
                               description='是否打开 MuJoCo viewer'),
         DeclareLaunchArgument('use_foxglove', default_value='true',
                               description='是否启动 foxglove_bridge'),
+        DeclareLaunchArgument('use_nav', default_value='true',
+                              description='是否同时启动导航节点（发布 /costmap 和 /plan）'),
+        DeclareLaunchArgument(
+            'workspace',
+            default_value=os.path.join(os.path.expanduser('~'), 'ros2_ws'),
+            description='工作区根目录（含 tests/nav_node.py）'),
 
         Node(
             package='mujoco_ros2_bridge',
@@ -53,5 +65,14 @@ def generate_launch_description() -> LaunchDescription:
             # 重启整套系统时 8765 可能还在 TIME_WAIT，绑定失败会自动重试
             respawn=True,
             respawn_delay=3.0,
+        ),
+
+        # 导航节点：发布 /costmap、/plan，订阅 /goal_pose，输出 /cmd_vel
+        # 用 ExecuteProcess 而不是 Node，因为它不在 ROS 包里（只是脚本）
+        ExecuteProcess(
+            cmd=['python3', 'tests/nav_node.py'],
+            cwd=workspace,
+            output='screen',
+            condition=IfCondition(use_nav),
         ),
     ])
