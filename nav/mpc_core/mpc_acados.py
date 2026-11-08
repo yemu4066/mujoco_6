@@ -237,7 +237,7 @@ class AugmentedSwerveMPC(AcadosMPCBase):
         ocp.cost.cost_type = ocp.cost.cost_type_e = 'NONLINEAR_LS'
         # 位置权重下调到 0.5：反正有横向项管住"别偏"，不再需要靠位置项硬拉。
         # 横向权重 2.0：这是抑制切角的主力。
-        ocp.cost.W = np.diag([0.5, 0.5, 0.2, 2.0, 0, 0, 0, 0.1, 0.5, 0.5])
+        ocp.cost.W = np.diag([2.0, 2.0, 0.2, 2.0, 0, 0, 0, 0.05, 0.2, 0.2])
         ocp.cost.W_e = np.diag([4.0, 4.0, 0.2, 2.0, 0.2, 0.2, 0.2])
 
     def update(self, x_current: np.ndarray) -> np.ndarray:
