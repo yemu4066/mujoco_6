@@ -116,5 +116,10 @@ def inflate(occupied: np.ndarray, resolution: float, inscribed_radius: float,
     cost = (1.0 - ramp) ** float(decay_power) * (LETHAL - 1)
 
     cost[dist >= float(inflation_radius)] = 0.0
+    # dist < inscribed_radius 必须是**真正的**不可通行。
+    # 之前只给到 LETHAL-1（253），而判可通行的阈值就是 <254，
+    # 于是这条"硬约束"实际上没生效 —— inscribed_radius 形同虚设，
+    # A* 会贴着墙走，过 0.9 m 宽的窄门时车角就刮上了。
+    cost[dist < float(inscribed_radius)] = LETHAL
     cost[occupied] = LETHAL
     return np.clip(cost, 0, LETHAL).astype(np.uint8)
