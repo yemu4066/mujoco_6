@@ -255,12 +255,12 @@
     <geom name="col_fence_s" type="box" size="5.55 0.025 0.05" pos="0.0000 -5.5250 0.0750" rgba="1 1 1 0" />
     <geom name="col_fence_e" type="box" size="0.025 5.55 0.05" pos="5.5250 0.0000 0.0750" rgba="1 1 1 0" />
     <geom name="col_fence_w" type="box" size="0.025 5.55 0.05" pos="-5.5250 0.0000 0.0750" rgba="1 1 1 0" />
-    <geom name="col_l1fence_n" type="box" size="3 0.025 0.05" pos="0.0000 2.9750 0.6750" rgba="1 1 1 0" />
-    <geom name="col_l1fence_s" type="box" size="3 0.025 0.05" pos="0.0000 -2.9750 0.6750" rgba="1 1 1 0" />
-    <geom name="col_l1fence_e_s" type="box" size="0.025 0.5750 0.05" pos="2.9750 -2.3750 0.6750" rgba="1 1 1 0" />
-    <geom name="col_l1fence_e_n" type="box" size="0.025 1.8750 0.05" pos="2.9750 1.0750 0.6750" rgba="1 1 1 0" />
-    <geom name="col_l1fence_w_s" type="box" size="0.025 0.5750 0.05" pos="-2.9750 -2.3750 0.6750" rgba="1 1 1 0" />
-    <geom name="col_l1fence_w_n" type="box" size="0.025 1.8750 0.05" pos="-2.9750 1.0750 0.6750" rgba="1 1 1 0" />
+    <geom name="col_l1fence_n" type="box" size="3 0.025 0.025" pos="0.0000 2.9750 0.6500" rgba="1 1 1 0" />
+    <geom name="col_l1fence_s" type="box" size="3 0.025 0.025" pos="0.0000 -2.9750 0.6500" rgba="1 1 1 0" />
+    <geom name="col_l1fence_e_s" type="box" size="0.025 0.5750 0.025" pos="2.9750 -2.3750 0.6500" rgba="1 1 1 0" />
+    <geom name="col_l1fence_e_n" type="box" size="0.025 1.8750 0.025" pos="2.9750 1.0750 0.6500" rgba="1 1 1 0" />
+    <geom name="col_l1fence_w_s" type="box" size="0.025 0.5750 0.025" pos="-2.9750 -2.3750 0.6500" rgba="1 1 1 0" />
+    <geom name="col_l1fence_w_n" type="box" size="0.025 1.8750 0.025" pos="-2.9750 1.0750 0.6500" rgba="1 1 1 0" />
     <geom name="col_band_red_plat" type="box" size="0.5 0.5 0.3" pos="-3.5000 -1.3000 0.3250" rgba="1 1 1 0" />
     <geom name="col_band_red_step1" type="box" size="0.5 0.15 0.075" pos="-3.5000 -2.5500 0.0875" rgba="1 1 1 0" />
     <geom name="col_band_red_step2" type="box" size="0.5 0.15 0.1625" pos="-3.5000 -2.2500 0.1625" rgba="1 1 1 0" />

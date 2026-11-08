@@ -71,6 +71,7 @@ class NavNode(Node):
         self.pose = None
         self._scan_logged = False
         self._has_scan = False
+        self.obstacle_z_max = 1.0    # 高于这个高度的障碍忽略（够不着）
         self._map_msg = self._build_costmap()
         # 周期性重发：Foxglove 默认用 VOLATILE 订阅，晚连上收不到
         # 启动时发的那一条 TRANSIENT_LOCAL 历史消息，所以隔一秒再发一次。
@@ -104,7 +105,8 @@ class NavNode(Node):
         ok = self.nav.set_goal(msg.pose.position.x, msg.pose.position.y, yaw,
                                pose=self.pose)
         if not ok:
-            self.get_logger().warn('目标不可达')
+            reason = getattr(self.nav, 'last_error', '') or '未知原因'
+            self.get_logger().warn(f'目标不可达：{reason}')
             return
         self.get_logger().info(
             f'目标 ({msg.pose.position.x:.2f},{msg.pose.position.y:.2f}) '
@@ -144,6 +146,10 @@ class NavNode(Node):
         pts = []
         for obs in msg.obstacles:
             if obs.confidence < 0.5:
+                continue
+            # 按高度过滤：车在地面/L1，够不着 L2（z≈1.175）上的物体。
+            # 真雷达也有同样的问题——装在低处的雷达扫不到高处的物体。
+            if obs.position.z > self.obstacle_z_max:
                 continue
             r = max(0.05, float(obs.radius))
             # 圆周采样，近似一个圆
