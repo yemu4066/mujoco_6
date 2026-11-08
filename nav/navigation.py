@@ -41,13 +41,13 @@ class Navigation:
     """A* 全局规划 + acados MPC 局部跟踪，纯 Python，不依赖 ROS。"""
 
     def __init__(self, map_yaml: str, *,
-                 inscribed_radius: float = 0.42,
+                 inscribed_radius: float = 0.35,
                  inflation_radius: float = 0.68,
                  cost_weight: float = 2.0,
-                 ref_speed: float = 0.5,
+                 ref_speed: float = 1.2,
                  mpc_dt: float = 0.05,
-                 mpc_horizon: int = 25,
-                 v_max: float = 1.5,
+                 mpc_horizon: int = 35,
+                 v_max: float = 4.0,
                  goal_tolerance: float = 0.15,
                  rotate_tolerance: float = 0.05,
                  rotate_gain: float = 2.5,
@@ -64,6 +64,27 @@ class Navigation:
         self._inscribed_cells = max(1, int(round(inscribed_radius / base.spec.resolution)))
         self.cost_weight = float(cost_weight)
         self.planner = GridPlanner(self.costmap, cost_weight=cost_weight)
+
+        # 到最近障碍的距离场（启动时算一次，约 60 ms），用来判断通道宽窄
+        from scipy import ndimage
+        self._dist_field = ndimage.distance_transform_edt(~occupied) * base.spec.resolution
+
+        # 按通道宽度分档限速。**默认关闭**——让 MPC 自己按 4 m/s 的约束决定速度。
+        # 需要重新打开时，把 speed_widths 填回去：
+        #     ((1.30, 0.30), (2.00, 0.45))
+        # 窄门必须降速：1 m 门、0.65 m 车，超过 0.5 m/s 时下坡侧滑会让车偏 15 cm
+        self.speed_widths = ((1.30, 0.30), (2.00, 0.80))
+        self.speed_wide = float(ref_speed)
+        # 转角限速：v <= sqrt(a_lat / kappa)。
+        # 参考点是按时间等距推进的，转角处路径弯曲而参考点"直线前进"，
+        # MPC 会在"贴路径"和"追参考点"之间反复权衡，表现为来回修正、绕圈。
+        # 按曲率把推进速度降下来，两者就不冲突了。
+        self.lat_acc_max = 100.0        # 允许的最大横向加速度 [m/s²]
+        self.speed_min = 0.20         # 再慢也不低于这个
+
+        # 路径上每点的限速（set_goal 时算）
+        self._path_s: np.ndarray | None = None
+        self._path_vmax: np.ndarray | None = None
 
         # ---- 动态障碍（雷达）----
         self._dynamic_points: np.ndarray | None = None   # (N, 2) 世界坐标
@@ -86,6 +107,7 @@ class Navigation:
         self._goal: tuple[float, float, float] | None = None
         self._path: np.ndarray | None = None
         self._blocked = False       # 当前是否因障碍无法前进
+        self.last_error = ''        # 最近一次 set_goal 失败的原因
 
     # ================================================================
     # 对外接口
@@ -115,10 +137,24 @@ class Navigation:
 
         # 用「静态 + 动态障碍」的图来规划
         plan_cost = self._planning_cost()
+        height, width = plan_cost.shape
+        if not (0 <= si < width and 0 <= sj < height):
+            self.last_error = '起点在图外'
+            self._blocked = True
+            return False
+
+        # 起点**强制**可通行：车就在这儿，不管图上怎么说都必须从这儿出发。
+        # 之前用 nearest_free 找 40 cm 内的空格，车停在围栏旁或被动态障碍
+        # 的膨胀覆盖时，找不到空格就直接规划失败 —— 表现为"发了目标车不动"。
+        plan_cost[max(0, sj - 1):min(height, sj + 2),
+                  max(0, si - 1):min(width, si + 2)] = 0
+        s = (si, sj)
+
+        # 终点允许吸附：用户可能点到了围栏上
         passable = plan_cost < 254
-        s = nearest_free(passable, (si, sj), 8)
-        g = nearest_free(passable, (gi, gj), 8)
-        if s is None or g is None:
+        g = nearest_free(passable, (gi, gj), 20)      # 半径 8 -> 20（1 m）
+        if g is None:
+            self.last_error = '目标附近 1 m 内没有可通行格（点到障壁里了？）'
             self._blocked = True
             return False
 
@@ -126,6 +162,7 @@ class Navigation:
                               cost_weight=self.cost_weight)
         indices = planner.plan(s, g)
         if indices is None:
+            self.last_error = 'A* 无解（起点被围死，或目标不可达）'
             self._blocked = True
             return False
 
@@ -134,8 +171,10 @@ class Navigation:
 
         self._goal = (float(x), float(y), float(yaw))
         self._path = points
+        self._build_speed_profile(points)
         self._phase = TRACK
         self._blocked = False
+        self.last_error = ''
         self._last_replan = time.time()
         return True
 
@@ -189,6 +228,9 @@ class Navigation:
         if self._blocked:
             return (0.0, 0.0, 0.0)
 
+        # ---- 按通道宽度调整参考速度 ----
+        self._apply_speed_limit()
+
         # ---- 阶段 ①：MPC 跟踪 ----
         u = self.mpc.update(np.array([x, y, yaw]))
         vx, vy, wz = float(u[0]), float(u[1]), float(u[2])
@@ -199,6 +241,69 @@ class Navigation:
             vx, vy = vx * k, vy * k
 
         return (vx, vy, wz)
+
+    # ================================================================
+    # 按通道宽度限速
+    # ================================================================
+    def _build_speed_profile(self, points: np.ndarray) -> None:
+        """给路径上每个点算一个速度上限，越窄越慢。
+
+        宽度 = 2 × 到最近障碍的距离。1 m 的门对 0.65 m 的车只有
+        17.5 cm 单边余量，全速通过会因侧滑贴着围栏走。
+        """
+        spec = self.costmap.spec
+        res = spec.resolution
+        height, width = self._dist_field.shape
+
+        i = np.round((points[:, 0] - spec.origin_x) / res).astype(np.int64)
+        j = np.round((points[:, 1] - spec.origin_y) / res).astype(np.int64)
+        ok = (i >= 0) & (i < width) & (j >= 0) & (j < height)
+        dist = np.zeros(len(points), dtype=np.float64)
+        dist[ok] = self._dist_field[j[ok], i[ok]]
+
+        clearance = dist * 2.0        # 近似通道宽度
+        vmax = np.full(len(points), self.speed_wide, dtype=np.float64)
+        for thr, v in self.speed_widths:
+            vmax = np.where(clearance < thr, np.minimum(vmax, v), vmax)
+
+        # 曲率限速
+        kappa = self._curvature(points)
+        v_curve = np.sqrt(self.lat_acc_max / np.maximum(kappa, 1e-3))
+        vmax = np.minimum(vmax, np.maximum(v_curve, self.speed_min))
+
+        # 沿弧长累计，供 update 查表
+        seg = np.hypot(np.diff(points[:, 0]), np.diff(points[:, 1]))
+        s = np.concatenate(([0.0], np.cumsum(seg)))
+        self._path_s = s
+        self._path_vmax = vmax
+
+    @staticmethod
+    def _curvature(points: np.ndarray) -> np.ndarray:
+        """离散曲率 kappa = |x'y'' - y'x''| / (x'^2+y'^2)^1.5。"""
+        if len(points) < 3:
+            return np.zeros(len(points))
+        x, y = points[:, 0], points[:, 1]
+        dx, dy = np.gradient(x), np.gradient(y)
+        ddx, ddy = np.gradient(dx), np.gradient(dy)
+        denom = (dx * dx + dy * dy) ** 1.5
+        num = np.abs(dx * ddy - dy * ddx)
+        return np.where(denom > 1e-9, num / np.maximum(denom, 1e-9), 0.0)
+
+    def _apply_speed_limit(self) -> None:
+        """按车当前弧长位置设置 MPC 的参考推进速度。"""
+        if self._path_s is None or self._last_pose is None:
+            return
+        end = self.mpc.path_planner
+        if len(end.x_path) == 0:
+            return
+        s_now = end.get_nearest_s(self._last_pose[0], self._last_pose[1])
+        # 往前看 2 m 取最严格的限制。
+        # 视野只有 1.5 m 时是"到了窄道才减"，来不及；
+        # 提前 2 m 减速，车到弯道/窄门前速度已经降下来了。
+        look = s_now + 0.6
+        k = int(np.searchsorted(self._path_s, min(look, self._path_s[-1])))
+        k = max(0, min(k, len(self._path_vmax) - 1))
+        self.mpc.ref_speed = float(self._path_vmax[k])
 
     # ================================================================
     # 动态障碍
