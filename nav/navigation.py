@@ -107,6 +107,15 @@ class Navigation:
         self._goal: tuple[float, float, float] | None = None
         self._path: np.ndarray | None = None
         self._blocked = False       # 当前是否因障碍无法前进
+        # ---- 死锁脱困 ----
+        # MPC 的动力学 f=[v·cos(θ+α), v·sin(θ+α)] 在 v=0、α=0 处，
+        # 若路径方向和车头差 90°，两个控制量都没有梯度，会永久卡住。
+        # 不放宽 MPC 内部（改一次崩一次），只在外层检测到卡死时
+        # 直接给一个小速度把车"推"出死锁，之后 MPC 自己接管。
+        self._stuck_frames = 0
+        self._anchor = None        # 判断位移的锚点
+        self.stuck_frames_threshold = 30   # 约 0.3 s（10 ms 一帧）
+        self.kick_speed = 0.15             # 脱困速度 [m/s]
         self.last_error = ''        # 最近一次 set_goal 失败的原因
 
     # ================================================================
@@ -175,6 +184,8 @@ class Navigation:
         self._phase = TRACK
         self._blocked = False
         self.last_error = ''
+        self._stuck_frames = 0
+        self._anchor = None
         self._last_replan = time.time()
         return True
 
@@ -234,6 +245,37 @@ class Navigation:
         # ---- 阶段 ①：MPC 跟踪 ----
         u = self.mpc.update(np.array([x, y, yaw]))
         vx, vy, wz = float(u[0]), float(u[1]), float(u[2])
+
+        # ---- 死锁脱困 ----
+        # 判定用「位移」而不是「速度」：
+        #   - 完全卡死时速度恒 0
+        #   - 还有一种是来回振荡（+0.09/-0.07/+0.03...），速度不为 0
+        #     但净位移始终为 0
+        # 两种都要能抓到，所以看"最近 N 帧内位移有没有超过阈值"。
+        if self._anchor is None:
+            self._anchor = (x, y)
+        moved = math.hypot(x - self._anchor[0], y - self._anchor[1])
+        if moved < 0.02:
+            self._stuck_frames += 1
+        else:
+            self._stuck_frames = 0
+            self._anchor = (x, y)
+
+        if self._stuck_frames >= self.stuck_frames_threshold:
+            kick = self._kick_direction(x, y, yaw)
+            if kick is not None:
+                vx, vy = kick[0] * self.kick_speed, kick[1] * self.kick_speed
+                # 保持触发：只踢一两帧的话，车刚动起来 MPC 又振荡回原点，
+                # 会变成"走两步停三步"。这里让踢的动作持续到车真的开始
+                # 移动（位移超过 2 cm，_stuck_frames 会被重置），
+                # 但设个上限防止永远踢下去。
+                self._kick_frames = getattr(self, '_kick_frames', 0) + 1
+                if self._kick_frames < 120:      # 最多踢 1.2 秒
+                    self._stuck_frames = self.stuck_frames_threshold
+                else:
+                    self._kick_frames = 0
+        else:
+            self._kick_frames = 0
 
         speed = math.hypot(vx, vy)
         if speed > self.v_max and speed > 1e-9:
@@ -427,6 +469,30 @@ class Navigation:
             if d < threshold:
                 return True
         return False
+
+    def _kick_direction(self, x, y, yaw):
+        """算出脱困方向（车体系单位向量）：指向「前方最近的参考点」。
+
+        参考点比目标点好：它已经在路径上，不用再考虑绕障。
+        """
+        end = self.mpc.path_planner
+        if len(end.x_path) == 0:
+            return None
+        s_now = end.get_nearest_s(x, y)
+        s_look = min(s_now + 0.5, float(end.s_samples[-1]))
+        st = end.get_states_batch(np.array([s_look]))[0]
+        dx, dy = float(st[0]) - x, float(st[1]) - y
+        n = math.hypot(dx, dy)
+        if n < 1e-6:
+            return None
+        # 世界系 → 车体系
+        c, s = math.cos(yaw), math.sin(yaw)
+        bx = c * dx + s * dy
+        by = -s * dx + c * dy
+        bn = math.hypot(bx, by)
+        if bn < 1e-9:
+            return None
+        return (bx / bn, by / bn)
 
     def cancel(self) -> None:
         """放弃当前目标，回到 IDLE。"""
