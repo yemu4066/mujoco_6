@@ -87,6 +87,10 @@ class Navigation:
         self._path_vmax: np.ndarray | None = None
 
         # ---- 动态障碍（雷达）----
+        # 动态避障总开关。默认关闭 —— 底盘还没接雷达时不会有任何数据，
+        # 保持关闭也能避免"订阅了不存在的话题"这类困惑。
+        # 接上 MS200 之后设 True（或者直接调 set_scan，会自动打开）。
+        self.enable_dynamic_obstacles = False
         self._dynamic_points: np.ndarray | None = None   # (N, 2) 世界坐标
         self._scan_dirty = False
         self._last_replan = 0.0
@@ -356,6 +360,8 @@ class Navigation:
         内部会：过滤无效值 → 极坐标转车体系 → 用最近位姿转世界系 →
         存成动态障碍点。**下一帧会全量替换**，所以障碍走开后自动消失。
         """
+        if not self.enable_dynamic_obstacles:
+            return
         if self._last_pose is None:
             return
 
@@ -388,6 +394,8 @@ class Navigation:
 
     def set_obstacle_points(self, points) -> None:
         """直接设置动态障碍的世界坐标点（测试/仿真用，跳过坐标转换）。"""
+        if not self.enable_dynamic_obstacles:
+            return
         pts = np.asarray(points, dtype=np.float64)
         if pts.ndim != 2 or pts.shape[1] != 2 or len(pts) == 0:
             self._dynamic_points = None
