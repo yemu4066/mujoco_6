@@ -72,7 +72,6 @@ class AcadosMPCBase(ABC):
         """设置跟踪路径"""
         self.path_planner.generate_path(points[:, 0], points[:, 1])
         self.target_yaw, self.ref_speed, self.following = target_yaw, ref_speed, True
-        self._alpha_guess = None      # 新任务，清掉上一段的记忆
     def set_target_point(self, target: np.ndarray):
         """设置定点停靠"""
         self.following, self.target_point = False, target.flatten()
@@ -91,49 +90,6 @@ class AcadosMPCBase(ABC):
 
             [self.solver.set(k, "p", ref_p[k]) for k in range(self.n_horizon)]
             self.solver.set(self.n_horizon, "p", ref_p[-1])
-
-            # ---- 关键：给 α 一个正确的初始猜测 ----
-            #
-            # 动力学是 f = [v·cos(θ+α), v·sin(θ+α)]。在 α = 0、v = 0 处，
-            # SQP 线性化后 ∂f/∂v = [cos(θ), sin(θ)]。如果路径方向和车头差
-            # 90°，cos(θ)=0，x 方向没有任何梯度 —— MPC 找不到"该往哪走"，
-            # 解出来恒为 0。表现就是"路径是横向的，车一动都不动"。
-            #
-            # 解法：把 α 的初值猜成「参考点方向 - 车头方向」。
-            # 注意必须设**整个 horizon**，只改第 0 步没用（第 0 步被
-            # lbx=ubx 固定住了）。
-            # 用远一点的参考点算方向：相邻两点只隔 6 cm，
-            # 路径细节（格子锯齿）就能把方向带偏 30° 以上。
-            k_far = min(5, self.n_horizon)
-            d = ref_p[k_far, 0:2] - ref_p[0, 0:2]
-            if np.linalg.norm(d) > 1e-9:
-                alpha0 = float(np.arctan2(d[1], d[0]) - x_current[2])
-                alpha0 = float(np.arctan2(np.sin(alpha0), np.cos(alpha0)))
-            else:
-                alpha0 = 0.0
-            # 只在「从静止起步 + 方向差很大」时才需要这个初值。
-            #
-            # 两个条件缺一不可：
-            #   - 方向差 < 45°：原来的零初值就能正常求解，硬设会打乱加速
-            #   - 已经在动：行进中路径的细微弯曲会让 alpha0 在阈值附近抖动，
-            #     抖到就横移一下、不抖就正常，表现是「走着走着左右横跳」。
-            #     初值本来只是解决起步时零梯度的问题，行进中不需要。
-            # 滞回：alpha0 每帧的变化限制在 15° 以内。
-            # 直线行进时路径的微小弯曲会让 alpha0 在阈值附近跳变，
-            # 跳过去就横移一下、跳回来又正常 —— 表现是「走着走着左右横跳」。
-            prev = getattr(self, '_alpha_guess', None)
-            if prev is not None:
-                delta = alpha0 - prev
-                delta = float(np.arctan2(np.sin(delta), np.cos(delta)))
-                lim = np.radians(15.0)
-                alpha0 = prev + float(np.clip(delta, -lim, lim))
-            self._alpha_guess = alpha0
-
-            if abs(alpha0) > np.radians(45.0):
-                xg = np.array([x_current[0], x_current[1], x_current[2],
-                               x_current[3], alpha0, 0.0])
-                for k in range(self.n_horizon + 1):
-                    self.solver.set(k, "x", xg)
         else:
             tp = getattr(self, 'target_point', x_current[:3])
             tp5 = np.array([tp[0], tp[1], tp[2], 0.0, 0.0])   # 定点停靠不需要横向约束
