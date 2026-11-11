@@ -24,6 +24,7 @@ import numpy as np
 from .astar import GridPlanner, nearest_free
 from .map import LETHAL, Costmap, inflate, load_map
 from .mpc_core.mpc_acados import AugmentedSwerveMPC
+from .path_smooth import smooth_path
 
 # 阶段常量
 IDLE = 'IDLE'
@@ -41,17 +42,27 @@ class Navigation:
     """A* 全局规划 + acados MPC 局部跟踪，纯 Python，不依赖 ROS。"""
 
     def __init__(self, map_yaml: str, *,
-                 inscribed_radius: float = 0.35,
-                 inflation_radius: float = 0.68,
+                 car_length: float = 0.70,
+                 car_width: float = 0.65,
+                 inscribed_radius: float = 0.43,
+                 inflation_radius: float = 0.90,
                  cost_weight: float = 2.0,
-                 ref_speed: float = 1.2,
-                 mpc_dt: float = 0.05,
-                 mpc_horizon: int = 35,
+                 ref_speed: float = 1.4,
+                 mpc_dt: float = 0.01,
+                 mpc_horizon: int = 175,
                  v_max: float = 4.0,
-                 goal_tolerance: float = 0.15,
+                 goal_tolerance: float = 0.05,
                  rotate_tolerance: float = 0.05,
                  rotate_gain: float = 2.5,
-                 rotate_max: float = 1.2) -> None:
+                 rotate_max: float = 1.2,
+                 smooth_loss: float = 0.03,
+                 smooth_radius: float = 0.35,
+                 smooth_adaptive: float = 0.58,
+                 speed_lookahead: float = 1.2,
+                 dalpha_max: float = 3.0,
+                 dv_max: float = 2.0,
+                 straight_kappa: float = 0.3,
+                 straight_boost: float = 0.08) -> None:
         # ---- 地图 ----
         base, occupied = load_map(map_yaml)
         cost = inflate(occupied, base.spec.resolution,
@@ -61,25 +72,90 @@ class Navigation:
         self.costmap = Costmap(data=cost, spec=base.spec)
         # 静态图保持不变；动态障碍叠加在副本上，不改原图
         self._static_cost = cost.copy()
+        # ★ inscribed_radius 的物理含义是"车体最坏朝向下的外接圆半径"，不是车宽一半。
+        #   车体 0.70x0.65 → 外接圆 0.478 m。车头锁死时车身可能斜 45° 移动，
+        #   此时需要 0.478；只有正交移动才是 0.325。
+        #   之前设 0.35/0.40 意味着 A* 认为"能走"的地方，车体实际侵入 13/8 cm ——
+        #   这是"过直角墙就撞"的根因，跟平滑无关。
+        self.inscribed_radius = float(inscribed_radius)
         self._inscribed_cells = max(1, int(round(inscribed_radius / base.spec.resolution)))
         self.cost_weight = float(cost_weight)
-        self.planner = GridPlanner(self.costmap, cost_weight=cost_weight)
+
+        # ---- 路径平滑 ----
+        # A* 是八邻域搜索，产物必然是 0/45/90° 的阶梯。CubicSpline 是**插值**，
+        # 会忠实复现这个阶梯 —— 实测最小曲率半径只有 2.6 cm，而车长 0.70 m，
+        # 物理上跟不出来（表现就是拐角处切内角、横向偏 15 cm）。
+        #
+        # 平滑器把阶梯换成"直线段 + 圆弧"，曲率能到 40~50 cm。三步：
+        #   ① 视线拉直 ② 圆弧倒角 ③ 5 cm 稠密重采样
+        # 圆弧上的每一点都检查离障 >= smooth_margin，窄处干脆不倒角。
+        #
+        # smooth_loss 是"允许平滑后比原路径再贴墙多少"。
+        # 两个方向都有代价，务必小心：
+        #   loss 大 → 圆弧能切得更狠、曲率更好，但实测撞墙。
+        #     对角任务 A* 离障 0.55 m，车头锁死斜 45° 扫掠半宽 0.477 m，
+        #     本来只剩 7 cm；loss=0.06 直接把余量吃到 2 cm，跟踪误差一上来就撞。
+        #   loss 小 → 保住了余量，但圆弧放不下，曲率只改善到 20 cm 左右。
+        #
+        # 实测（1.1 m 门 + 0.65 m 车）：
+        #   loss=0.06 → 离障 0.50 m  曲率 43 cm   ← 撞墙（实测）
+        #   loss=0.03 → 离障 0.55 m  曲率 35 cm
+        #   loss=0.00 → 离障 0.55 m  曲率 13 cm   ← 严格不劣化，保底方案
+        #
+        # ★ 直角拐角要特别注意：R 的圆弧在 90° 角上会往墙里切 0.414·R。
+        #   R=0.50 → 切 20.7 cm；R=0.35 → 切 14.5 cm。远大于 loss。
+        #   所以直角处的圆弧基本都会被拒（退化成尖角），这是**正确**的行为。
+        self.smooth_loss = float(smooth_loss)          # 允许比原路径再让出多少 [m]
+        self.smooth_radius = float(smooth_radius)      # 圆弧半径 [m]
+        self.smooth_adaptive = float(smooth_adaptive)   # 折点附近余量小于它就不倒角 [m]
 
         # 到最近障碍的距离场（启动时算一次，约 60 ms），用来判断通道宽窄
         from scipy import ndimage
         self._dist_field = ndimage.distance_transform_edt(~occupied) * base.spec.resolution
 
-        # 按通道宽度分档限速。**默认关闭**——让 MPC 自己按 4 m/s 的约束决定速度。
-        # 需要重新打开时，把 speed_widths 填回去：
-        #     ((1.30, 0.30), (2.00, 0.45))
-        # 窄门必须降速：1 m 门、0.65 m 车，超过 0.5 m/s 时下坡侧滑会让车偏 15 cm
-        self.speed_widths = ((1.30, 0.30), (2.00, 0.80))
         self.speed_wide = float(ref_speed)
+        self.car_length = float(car_length)
+        self.car_width = float(car_width)
+
+        # ★ 车体外接圆半径 = 车头锁死、车身斜 45° 时需要的包络。
+        #   这才是"车体到障碍"真正要的距离，比车宽一半（0.325）大 47%。
+        #   限速的余量必须按它算，否则会高估 3 倍（实测：门处真实余量 7 cm，
+        #   而按车宽算出来是 22.5 cm，于是给了 0.75 m/s —— 一偏就撞）。
+        self.car_sweep_radius = 0.5 * math.hypot(self.car_length, self.car_width)
+
+        # 余量 = 到墙距离 − 车体外接圆 = **还能横向偏多少不碰车体**
+        self.speed_margin_min = 0.01   # 余量 <= 此值 → 降到 speed_floor
+        self.speed_margin_max = 0.15   # 余量 >= 此值 → 跑满 ref_speed
+        self.speed_floor = 0.35        # 最慢不慢于此
+        # 限速前瞻长度 [m]：取 [s_now, s_now+它] 区间内的最小限速
+        self.speed_lookahead = float(speed_lookahead)
+        # 转向角速率的物理上限 [rad/s]，要和 mpc_acados.py 里 dα 的约束一致。
+        # 车头锁死时拐弯全靠 α：v/R <= dα → 弯道速度上限 = dα·R。
+        self.dalpha_max = float(dalpha_max)
+
+        # 纵向加速度上限 [m/s²]，要和 mpc_acados.py 里 dv 的约束一致。
+        # 掉头/折返不靠转弯，靠 v 变号（α 不变），真正的约束是制动距离：
+        #     v <= sqrt(2 · dv · 可用横向空间)
+        self.dv_max = float(dv_max)
+
+        # 直道豁免：曲率小于 straight_kappa（≈R>3.3m）的地方按直道处理，
+        # 等效余量加 straight_boost。斜坡是典型场景 —— 它是 1 m 宽的窄直道，
+        # 却因为两侧有围栏被当成窄门限速。直道不需要转向，MPC 保持直线的
+        # 横向误差比过门小得多，所以同样的余量可以跑得快一点。
+        self.straight_kappa = float(straight_kappa)
+        self.straight_boost = float(straight_boost)
+
+        # 最近一帧的横向偏差 [m]，正=偏左（路径法向）。供外部监控/可视化用。
+        self.last_lateral = 0.0
         # 转角限速：v <= sqrt(a_lat / kappa)。
         # 参考点是按时间等距推进的，转角处路径弯曲而参考点"直线前进"，
         # MPC 会在"贴路径"和"追参考点"之间反复权衡，表现为来回修正、绕圈。
         # 按曲率把推进速度降下来，两者就不冲突了。
-        self.lat_acc_max = 100.0        # 允许的最大横向加速度 [m/s²]
+        # 曲率限速：v <= sqrt(a_lat / κ)
+        # 原来设 100，导致 sqrt(100/2.85)=5.9 m/s，比限速上限还高 —— 这一项等于没写，
+        # 拐角处照样 1.2 m/s 冲过去。降到 2.5 后 κ=2.85 的弯限到 1.03 m/s。
+        # 实测总时间几乎不变（拐角弧长占比极小），但拐角是真降速了。
+        self.lat_acc_max = 3.0          # 允许的最大横向加速度 [m/s²]
         self.speed_min = 0.20         # 再慢也不低于这个
 
         # 路径上每点的限速（set_goal 时算）
@@ -110,6 +186,7 @@ class Navigation:
         self._phase = IDLE
         self._goal: tuple[float, float, float] | None = None
         self._path: np.ndarray | None = None
+        self._raw_path: np.ndarray | None = None      # 平滑前的 A* 栅格路径
         self._blocked = False       # 当前是否因障碍无法前进
         # ---- 死锁脱困 ----
         # MPC 的动力学 f=[v·cos(θ+α), v·sin(θ+α)] 在 v=0、α=0 处，
@@ -180,6 +257,12 @@ class Navigation:
             return False
 
         points = np.array([spec.index_to_world(i, j) for i, j in indices])
+        self._raw_path = points
+        points = smooth_path(points, self._dist_field, spec,
+                             min_clearance=self.inscribed_radius,
+                             loss=self.smooth_loss,
+                             radius=self.smooth_radius,
+                             adaptive=self.smooth_adaptive)
         self.mpc.set_path(points, target_yaw=float(yaw), ref_speed=self.ref_speed)
 
         self._goal = (float(x), float(y), float(yaw))
@@ -243,7 +326,12 @@ class Navigation:
         if self._blocked:
             return (0.0, 0.0, 0.0)
 
-        # ---- 按通道宽度调整参考速度 ----
+        # ---- 横向偏差监控 ----
+        # 这是"车实际偏离规划路径多少"，和 MPC 代价里那个 lateral_err
+        # （预测未来的偏差）不是一回事。外部可以读 nav.last_lateral 做告警/降速。
+        self.last_lateral = self._lateral_error(x, y)
+
+        # ---- 按横向余量调整参考速度 ----
         self._apply_speed_limit()
 
         # ---- 阶段 ①：MPC 跟踪 ----
@@ -307,14 +395,66 @@ class Navigation:
         dist = np.zeros(len(points), dtype=np.float64)
         dist[ok] = self._dist_field[j[ok], i[ok]]
 
-        clearance = dist * 2.0        # 近似通道宽度
-        vmax = np.full(len(points), self.speed_wide, dtype=np.float64)
-        for thr, v in self.speed_widths:
-            vmax = np.where(clearance < thr, np.minimum(vmax, v), vmax)
+        # 允许的横向偏差 = 到墙距离 − 车体外接圆（两个分支都要用）
+        margin = dist - self.car_sweep_radius
 
-        # 曲率限速
+        # 曲率提前算：下面的"直道豁免"和"曲率限速"都要用
         kappa = self._curvature(points)
-        v_curve = np.sqrt(self.lat_acc_max / np.maximum(kappa, 1e-3))
+
+        # ---- 直道豁免 ----
+        # 同样的余量，长直道和窄门的风险不一样：直道不转向，MPC 只要
+        # 保持直线，横向误差远小于过门。判据是曲率（R 很大 = 直道），
+        # 对斜坡这种"窄但是直的"地方生效；极窄处（margin<=0.03）不豁免，
+        # 保住最窄点的安全底线。
+        straight = (kappa < self.straight_kappa) & (margin > 0.03)
+        margin_eff = margin + np.where(straight, self.straight_boost, 0.0)
+
+        span = max(self.speed_margin_max - self.speed_margin_min, 1e-6)
+        ratio = np.clip((margin_eff - self.speed_margin_min) / span, 0.0, 1.0)
+        vmax = self.speed_floor + (self.speed_wide - self.speed_floor) * ratio
+
+        # 前向看一眼：避免"到了才减"。用对称窗口近似，半径约 0.6 m
+        from scipy.ndimage import minimum_filter1d
+        look = max(1, int(round(0.6 / res)))
+        vmax = minimum_filter1d(vmax, size=2 * look + 1, mode='nearest')
+
+        # ---- 曲率限速：两个约束取较严的那个 ----
+        #   ① 横向加速度   v <= sqrt(a_lat · R)
+        #   ② 转向速率     v <= dα · R
+        #
+        # ★ ② 才是本项目的瓶颈：车头锁死（ω=0），拐弯只能靠 α，
+        #   而 α 的变化率受 dα ≤ 2 rad/s 限制。半径 0.35 m 的弯：
+        #       ① 给 0.94 m/s，② 只给 0.70 m/s
+        #   原来只按 ① 算（而且 a_lat 还写到 100，完全失效），
+        #   车以 1.0+ m/s 进弯，α 转不过来 → 冲出弯道 → 就是"过直角墙撞墙"。
+        radius = 1.0 / np.maximum(kappa, 1e-3)
+        v_lat = np.sqrt(self.lat_acc_max * radius)      # 横向加速度
+        v_steer = self.dalpha_max * radius              # 转向速率
+        v_curve = np.minimum(v_lat, v_steer)
+
+        # ---- 掉头 / 折返：不能用曲率限速 ----
+        # 全向车折返靠 v 变号（α 不用变、车头不转、扫掠宽度不变），
+        # 根本不存在"转弯半径"。而曲率在这种地方会算出 R≈5 cm
+        # （5 cm 采样步长 + 两段平行反向造成的数值假象），
+        # v_steer = dα·R ≈ 0.15，再被 speed_min 兜底到 0.20 —— 表现就是"刹停"。
+        #
+        # 折返真正的约束是**制动距离**：把 v 从 +v 变成 −v，
+        #     v <= sqrt(2 · dv · 可用横向空间)
+        # 宽处（余量 0.37 m）给 1.22 m/s，窄门（余量 0.07 m）给 0.53 m/s。
+        theta = np.arctan2(np.diff(points[:, 1]), np.diff(points[:, 0]))
+        turn = np.zeros(len(points))
+        if len(theta) > 1:
+            # theta 有 n-1 个，diff 之后 n-2 个，正好对应 turn[1..n-2]
+            # （turn[k] = 第 k-1 段与第 k 段之间的转角）
+            turn[1:-1] = np.abs(np.diff(np.unwrap(theta)))
+        # 阈值取 30°：平滑出来的圆弧拐角，单点转角只有 arctan 步长/半径
+        # ≈ 0.05/0.35 ≈ 8°；而真正 "平滑器放不下圆弧、被迫留下的尖角"
+        # 单点转角是 45°~180°。两者差一个数量级，30° 能干净分开。
+        sharp = turn > np.radians(30.0)
+        if sharp.any():
+            v_brake = np.sqrt(2.0 * self.dv_max * np.maximum(margin, 1e-3))
+            v_curve = np.where(sharp, v_brake, v_curve)
+
         vmax = np.minimum(vmax, np.maximum(v_curve, self.speed_min))
 
         # 沿弧长累计，供 update 查表
@@ -335,6 +475,19 @@ class Navigation:
         num = np.abs(dx * ddy - dy * ddx)
         return np.where(denom > 1e-9, num / np.maximum(denom, 1e-9), 0.0)
 
+    def _lateral_error(self, x: float, y: float) -> float:
+        """车相对规划路径的横向偏差 [m]（路径法向，左正右负）。"""
+        end = self.mpc.path_planner
+        if len(end.x_path) == 0:
+            return 0.0
+        try:
+            s_now = end.get_nearest_s(x, y)
+            ref = end.get_state_by_s(s_now)
+        except (ValueError, IndexError):
+            return 0.0
+        nx, ny = -math.sin(ref[2]), math.cos(ref[2])   # 路径法向
+        return float((x - ref[0]) * nx + (y - ref[1]) * ny)
+
     def _apply_speed_limit(self) -> None:
         """按车当前弧长位置设置 MPC 的参考推进速度。"""
         if self._path_s is None or self._last_pose is None:
@@ -343,13 +496,24 @@ class Navigation:
         if len(end.x_path) == 0:
             return
         s_now = end.get_nearest_s(self._last_pose[0], self._last_pose[1])
-        # 往前看 2 m 取最严格的限制。
-        # 视野只有 1.5 m 时是"到了窄道才减"，来不及；
-        # 提前 2 m 减速，车到弯道/窄门前速度已经降下来了。
-        look = s_now + 0.6
-        k = int(np.searchsorted(self._path_s, min(look, self._path_s[-1])))
-        k = max(0, min(k, len(self._path_vmax) - 1))
-        self.mpc.ref_speed = float(self._path_vmax[k])
+
+        # ★ 取"当前弧长 → 前方 speed_lookahead 米"这一段里的**最小**限速。
+        #
+        # 为什么不能用单点：单点只是换个位置去看，如果前瞻末端恰好是宽档，
+        #   看到的还是高速（实测把单点前瞻从 0.6 拉到 1.5，总时间一秒没变）。
+        #   而"直道后紧跟急转弯"的场景里，前方 1.2 m 处限速只有 0.57，
+        #   单点 0.6 m 完全看不到 → 车在直道全速加速 → 到弯口来不及 → 冲出去。
+        #
+        # 为什么是 1.2 m：1.2→0.3 m/s 的减速距离 0.34 m，加 MPC 的响应余量 0.3 m，
+        #   约 0.65 m 是理论下限；实测 0.6→1.0 还有 4% 差别，1.2 m 是稳妥折中
+        #   （总时间 +6%，换来弯前真正降速）。
+        s_end = min(s_now + self.speed_lookahead, self._path_s[-1])
+        k0 = int(np.searchsorted(self._path_s, max(0.0, s_now)))
+        k1 = int(np.searchsorted(self._path_s, s_end))
+        k0 = max(0, min(k0, len(self._path_vmax) - 1))
+        k1 = max(k1, k0 + 1)
+        k1 = min(k1, len(self._path_vmax))
+        self.mpc.ref_speed = float(self._path_vmax[k0:k1].min())
 
     # ================================================================
     # 动态障碍
@@ -516,5 +680,10 @@ class Navigation:
 
     @property
     def path(self) -> np.ndarray | None:
-        """最近一次的规划路径 (N, 2)，供可视化用。"""
+        """最近一次的规划路径 (N, 2)，供可视化用（平滑后）。"""
         return self._path
+
+    @property
+    def raw_path(self) -> np.ndarray | None:
+        """平滑前的 A* 栅格路径，和 ``path`` 叠在一起就能看出平滑做了什么。"""
+        return self._raw_path

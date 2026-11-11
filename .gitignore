@@ -1,23 +1,18 @@
 # Python
 __pycache__/
 *.py[cod]
-*.egg-info/
+.pytest_cache/
 
-# acados 生成的求解器代码
+# acados 生成物（每次编译重新产出，不入库）
 c_generated_code/
 mpc_ocp.json
+*.so
+*.o
 
-# MuJoCo 运行时日志
-MUJOCO_LOG.TXT
-
-# ROS 编译产物（colcon build 时产生）
+# 构建与日志
 build/
 install/
 log/
-src/
 
-# 编辑器 / 系统
-.vscode/*
-!.vscode/tasks.json
-.idea/
-.DS_Store
+# 运行日志
+MUJOCO_LOG.TXT
