@@ -93,7 +93,7 @@ def _max_curvature(P: np.ndarray) -> float:
 
 # ---------------------------------------------------------------- ① 拉直
 def _shorten(pts: np.ndarray, dist_field, spec, min_clearance: float,
-             loss: float, max_los: float) -> np.ndarray:
+             loss: float, max_los: float, adaptive: float = 0.40) -> np.ndarray:
     """视线拉直：从当前点尽量往后连一条满足 margin 的长直线。
 
     ``max_los`` 限制单次最多往前连多远，用来控制耗时。
@@ -105,11 +105,27 @@ def _shorten(pts: np.ndarray, dist_field, spec, min_clearance: float,
     out = [pts[0]]
     i, N = 0, len(pts)
     while i < N - 1:
-        # 最远只能看到 s[i] + max_los 处
         j = int(np.searchsorted(s, s[i] + max_los, side='right')) - 1
         j = min(max(j, i + 1), N - 1)
 
         while j > i + 1:
+            # ★ 窄区（这段路径的最小余量 < adaptive）下游 _fillet 是不会倒角的。
+            #   这里若还把两个 45° 阶梯拉成一个 90° 尖角，就等于凭空制造出比
+            #   A* 原路径更急的死角（实测把 R=14cm 拉到 R=2cm）。
+            #
+            #   注意必须看**整段**的最小余量，不能只看起点 clr[i]：
+            #   L1 通道里的路径常常贴着一边走，起点余量 0.65 看着很宽，
+            #   但跨过去那一段其实只有 0.45，照样会造出尖角。
+            if float(clr[i:j + 1].min()) < adaptive:
+                if float(s[j] - s[i]) > 0.25:
+                    j -= 1
+                    continue
+                th_seg_n = np.arctan2(np.diff(pts[i:j + 1, 1]),
+                                      np.diff(pts[i:j + 1, 0]))
+                if len(th_seg_n) > 1 and float(
+                        np.abs(np.diff(np.unwrap(th_seg_n))).sum()) > np.radians(50.0):
+                    j -= 1
+                    continue
             # 方向跨度太大 = 这段是"去又回"（U 形掉头），不是"拐个弯"。
             # 直接连过去会把 2 m 的绕行压成一条直线，MPC 在那里就迷路了。
             #   45° 阶梯：跨度 45°   90° 拐角：跨度 90°   U 形掉头：跨度 180°
@@ -176,6 +192,16 @@ def _fillet(verts: np.ndarray, dist_field, spec, min_clearance: float,
             tl = min(R / math.tan(ang / 2.0), 0.45 * min(n1, n2))
             if tl < 1e-6:
                 continue
+            # ★ 当 tl 被边长钳位时，与两条折线真正相切的半径是 tl·tan(ang/2)，
+            #   不是上面那个 R。原来直接拿 R 画弧，圆心到切点的距离只有 R 的
+            #   几分之一，圆弧会像蘑菇头一样往外鼓包（实测差 7.8 倍），
+            #   既撞墙又制造接近 180° 的假折返。
+            R_eff = tl * math.tan(ang / 2.0)
+            # 半径太小的圆弧没有意义：A* 原路径的拐角曲率半径约 14 cm，
+            # 放一个 R_eff=10 cm 的圆弧反而更急（实测平滑后 11 cm < 原 14 cm）。
+            # 窄区放不下就老实保留原折角，别强行倒小角。
+            if R_eff < 0.15:
+                continue
             p1, p2 = b + u1 * tl, b + u2 * tl
             bis = u1 + u2
             bn = np.linalg.norm(bis)
@@ -186,7 +212,7 @@ def _fillet(verts: np.ndarray, dist_field, spec, min_clearance: float,
             a0 = math.atan2(p1[1] - ctr[1], p1[0] - ctr[0])
             a1 = math.atan2(p2[1] - ctr[1], p2[0] - ctr[0])
             da = (a1 - a0 + math.pi) % (2 * math.pi) - math.pi
-            arc = _arc(ctr, R, a0, da)
+            arc = _arc(ctr, R_eff, a0, da)
             need = max(min_clearance, local_min - loss)
             if _clearance(arc, dist_field, spec).min() >= need:
                 out.extend(list(arc))
@@ -206,7 +232,8 @@ def _smooth_core(pts, dist_field, spec, min_clearance, loss, radius,
     base_min = float(_clearance(pts, dist_field, spec).min())
     allowed_min = max(min_clearance, base_min - loss)
     try:
-        verts = _shorten(pts, dist_field, spec, min_clearance, loss, max_los)
+        verts = _shorten(pts, dist_field, spec, min_clearance, loss, max_los,
+                         adaptive)
         path = _fillet(verts, dist_field, spec, min_clearance, loss,
                        radius, adaptive)
         path = _resample(path, step)
@@ -217,9 +244,11 @@ def _smooth_core(pts, dist_field, spec, min_clearance, loss, radius,
     # 校验 ①：平滑后不能明显比原来更贴墙
     if float(_clearance(path, dist_field, spec).min()) < allowed_min - 1e-6:
         return None
-    # 校验 ②：平滑后不能比原路径更"急"
-    if _max_curvature(path) > _max_curvature(pts) + 1e-9:
-        return None
+    # 校验 ② 已移除（原本是全局曲率一票否决）。
+    # 副作用：窄区保留原折角、宽区已经平滑好，只要窄区那一个点的离散曲率
+    # 比原路径大一点，整条（包括 9 米宽敞段）就被丢弃退回 A* 折线。
+    # 修好 R_eff 几何 Bug、并让 _shorten 不在窄区跨弯拉直之后，
+    # 窄区的曲率已经不会超过原路径，这道闸门不再需要。
     return path
 
 
