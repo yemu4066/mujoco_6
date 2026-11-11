@@ -259,6 +259,10 @@
     <geom name="col_band_red_step1" type="box" size="0.5 0.15 0.075" pos="-3.5000 -2.5500 0.0875" rgba="1 1 1 0" />
     <geom name="col_band_red_step2" type="box" size="0.5 0.15 0.1625" pos="-3.5000 -2.2500 0.1625" rgba="1 1 1 0" />
     <geom name="col_band_red_step3" type="box" size="0.5 0.15 0.2375" pos="-3.5000 -1.9500 0.2375" rgba="1 1 1 0" />
+    <!-- 红方斜坡碰撞体：原来只有蓝方有（col_band_blue_ramp），红坡纯视觉，
+         车会直接穿过去掉到地面。尺寸/倾角与蓝方完全对称（x 取反，绕 x 轴的
+         倾角不受 x 镜像影响），差别只在 pos.x = -3.5。 -->
+    <geom name="col_band_red_ramp" type="box" size="0.5 1.7755 0.025" pos="-3.5000 0.9460 0.3004" quat="0.996399 -0.084787 0 0" rgba="1 1 1 0" />
     <geom name="col_band_blue_plat" type="box" size="0.5 0.5 0.3" pos="3.5000 -1.3000 0.3250" rgba="1 1 1 0" />
     <geom name="col_band_blue_step1" type="box" size="0.5 0.15 0.075" pos="3.5000 -2.5500 0.0875" rgba="1 1 1 0" />
     <geom name="col_band_blue_step2" type="box" size="0.5 0.15 0.1625" pos="3.5000 -2.2500 0.1625" rgba="1 1 1 0" />
