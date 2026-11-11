@@ -639,7 +639,16 @@ class Navigation:
         if len(path) == 0:
             return False
 
-        threshold = self._inscribed_cells * self.costmap.spec.resolution * 1.5
+        # ★ 判据是「障碍真的压到路径上」，不是「靠近路径」。
+        #
+        # _dynamic_points 是障碍**边缘**的圆周采样点（半径 = 障碍半径），
+        # 所以"采样点到路径的距离"约等于"障碍边缘到路径的间隙"。
+        #
+        # 原来阈值取 inscribed*1.5 = 0.645 m，意思是障碍边缘离路径 32 cm
+        # 就判成挡路。但通道就那么宽，A* 绕开之后路径离障碍仍然小于这个值，
+        # 于是每 0.4 s 又触发一次重规划 —— 路径无限重规划，车走直线也在摆。
+        # 现在只要间隙小于 12 cm（车体边缘快蹭上）才重规划。
+        threshold = 0.12
         for p in self._dynamic_points:
             d = np.hypot(path[:, 0] - p[0], path[:, 1] - p[1]).min()
             if d < threshold:
