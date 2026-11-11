@@ -166,7 +166,11 @@ class Navigation:
         # 动态避障总开关。默认关闭 —— 底盘还没接雷达时不会有任何数据，
         # 保持关闭也能避免"订阅了不存在的话题"这类困惑。
         # 接上 MS200 之后设 True（或者直接调 set_scan，会自动打开）。
-        self.enable_dynamic_obstacles = False
+        # 动态避障总开关。打开后 nav.set_scan / set_obstacle_points 才会存点，
+        # update() 里才会做「障碍挡路 → 重规划」。
+        # 数据源：真机是 LaserScan；仿真是 mujoco_node 发布的 /obstacles
+        # （两个 mocap 对手），由 nav_node._on_obstacles 转成世界坐标点喂进来。
+        self.enable_dynamic_obstacles = True
         self._dynamic_points: np.ndarray | None = None   # (N, 2) 世界坐标
         self._scan_dirty = False
         self._last_replan = 0.0
