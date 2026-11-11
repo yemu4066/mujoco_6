@@ -175,6 +175,8 @@ class Navigation:
         # 调试层：手动加的障碍（Foxglove 点选）。和 _dynamic_points 分开存，
         # 因为 set_scan / set_obstacle_points 是**全量替换**，会把手动加的冲掉。
         self._manual_points: np.ndarray | None = None
+        # 手动障碍的**中心**（x, y, radius），给可视化用；_manual_points 是圆周采样
+        self._manual_centers: list[tuple[float, float, float]] = []
         self._scan_dirty = False
         self._last_replan = 0.0
         self.replan_interval = 0.4        # 最快重规划间隔 [s]
@@ -588,11 +590,13 @@ class Navigation:
             self._manual_points = ring
         else:
             self._manual_points = np.vstack([self._manual_points, ring])
+        self._manual_centers.append((float(x), float(y), float(radius)))
         self._scan_dirty = True
 
     def clear_manual_obstacles(self) -> None:
         """清空手动加的障碍（不动感知层的）。"""
         self._manual_points = None
+        self._manual_centers.clear()
         self._scan_dirty = True
 
     def _all_obstacle_points(self) -> np.ndarray | None:
@@ -607,6 +611,7 @@ class Navigation:
         """清空动态障碍。"""
         self._dynamic_points = None
         self._manual_points = None
+        self._manual_centers.clear()
         self._scan_dirty = False
 
     @property

@@ -28,6 +28,7 @@ import numpy as np
 import rclpy
 from geometry_msgs.msg import PointStamped, PoseStamped, Twist
 from std_msgs.msg import Empty
+from visualization_msgs.msg import Marker, MarkerArray
 from nav_msgs.msg import Odometry, OccupancyGrid, Path
 from sensor_msgs.msg import LaserScan
 from rclpy.node import Node
@@ -61,6 +62,9 @@ class NavNode(Node):
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.plan_pub = self.create_publisher(Path, '/plan', 10)
         self.map_pub = self.create_publisher(OccupancyGrid, '/costmap', map_qos)
+        # 手动障碍可视化：Foxglove 里加完能看见在哪儿
+        self.debug_obs_pub = self.create_publisher(
+            MarkerArray, '/debug_obstacles', 10)
 
         self.create_subscription(PoseStamped, '/goal_pose', self._on_goal, 10)
         self.create_subscription(Odometry, '/odom', self._on_odom, 20)
@@ -84,6 +88,7 @@ class NavNode(Node):
         # 周期性重发：Foxglove 默认用 VOLATILE 订阅，晚连上收不到
         # 启动时发的那一条 TRANSIENT_LOCAL 历史消息，所以隔一秒再发一次。
         self.create_timer(1.0, lambda: self.map_pub.publish(self._map_msg))
+        self.create_timer(0.5, self._publish_debug_obstacles)
         self.get_logger().info(
             f'/costmap {self._map_msg.info.width}x{self._map_msg.info.height}，'
             f'自由格 {int((self.nav.costmap.data == 0).sum())}')
@@ -178,6 +183,63 @@ class NavNode(Node):
         """清空手动障碍。"""
         self.nav.clear_manual_obstacles()
         self.get_logger().info('[debug] 已清空手动障碍')
+
+    def _publish_debug_obstacles(self) -> None:
+        """把手动障碍画成 Marker，让人在 Foxglove 里看得见。"""
+        centers = getattr(self.nav, '_manual_centers', None) or []
+        arr = MarkerArray()
+        # 先发一条 DELETEALL，避免清空后残留旧 marker
+        clear_m = Marker()
+        clear_m.header.frame_id = 'map'
+        clear_m.header.stamp = self.get_clock().now().to_msg()
+        clear_m.action = Marker.DELETEALL
+        arr.markers.append(clear_m)
+
+        # A* 实际看到的是"中心点膨胀 (inscribed + obstacle_clearance)"的圆，
+        # 这里就按这个半径画，看到的范围就是真正挡路的范围。
+        try:
+            res = self.nav.costmap.spec.resolution
+            r_eff = (self.nav._inscribed_cells
+                     + max(0, int(round(self.nav.obstacle_clearance / res)))) * res
+        except Exception:                      # noqa: BLE001
+            r_eff = 0.5
+
+        for k, (x, y, _rad) in enumerate(centers):
+            # ① 真实大小（半透明小球）
+            m = Marker()
+            m.header.frame_id = 'map'
+            m.header.stamp = self.get_clock().now().to_msg()
+            m.ns = 'manual_obstacle'
+            m.id = 2 * k
+            m.type = Marker.CYLINDER
+            m.action = Marker.ADD
+            m.pose.position.x = float(x)
+            m.pose.position.y = float(y)
+            m.pose.position.z = 0.5
+            m.pose.orientation.w = 1.0
+            m.scale.x = m.scale.y = max(0.1, 2.0 * 0.12)
+            m.scale.z = 1.2
+            m.color.r, m.color.g, m.color.b, m.color.a = 1.0, 0.45, 0.0, 0.85
+            arr.markers.append(m)
+
+            # ② 实际挡路半径（线框圆环，落在 z=0.02 地面上）
+            ring = Marker()
+            ring.header.frame_id = 'map'
+            ring.header.stamp = m.header.stamp
+            ring.ns = 'manual_obstacle_inflated'
+            ring.id = 2 * k + 1
+            ring.type = Marker.CYLINDER
+            ring.action = Marker.ADD
+            ring.pose.position.x = float(x)
+            ring.pose.position.y = float(y)
+            ring.pose.position.z = 0.02
+            ring.pose.orientation.w = 1.0
+            ring.scale.x = ring.scale.y = 2.0 * r_eff
+            ring.scale.z = 0.02
+            ring.color.r, ring.color.g, ring.color.b, ring.color.a = 1.0, 0.85, 0.1, 0.28
+            arr.markers.append(ring)
+
+        self.debug_obs_pub.publish(arr)
 
     def _on_odom(self, msg: Odometry) -> None:
         p = msg.pose.pose.position
