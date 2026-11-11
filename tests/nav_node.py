@@ -48,10 +48,29 @@ def yaw_of(q) -> float:
 
 
 class NavNode(Node):
-    def __init__(self, map_yaml: str):
+    def __init__(self, map_yaml: str | None = None):
         super().__init__('nav6_node')
 
-        self.nav = Navigation(map_yaml)
+        # 地图可运行时指定，默认 rc2027：
+        #   --ros-args -p map:=maps/debug_arena_10m.yaml
+        # 也接受相对仓库根的路径，或者只写地图名。
+        if map_yaml is None:
+            self.declare_parameter('map', str(ROOT / 'maps' / 'rc2027.yaml'))
+            map_yaml = str(self.get_parameter('map').value)
+        mp = pathlib.Path(map_yaml)
+        if not mp.is_absolute():
+            mp = (ROOT / mp).resolve()
+        if not mp.exists():
+            for cand in (ROOT / 'maps' / map_yaml,
+                         ROOT / 'maps' / f'{map_yaml}.yaml'):
+                if cand.exists():
+                    mp = cand.resolve()
+                    break
+        if not mp.exists():
+            raise FileNotFoundError(f'找不到地图: {map_yaml}（已尝试 {mp}）')
+        self.map_path = mp
+        self.nav = Navigation(str(mp))
+        self.get_logger().info(f'使用地图: {mp.name}')
         self.get_logger().info('导航库已初始化')
 
         # 地图用 transient_local，Foxglove 晚连也能拿到
@@ -261,7 +280,7 @@ class NavNode(Node):
 
 def main():
     rclpy.init()
-    node = NavNode(str(ROOT / 'maps' / 'rc2027.yaml'))
+    node = NavNode()          # 地图由 -p map:=... 决定，默认 maps/rc2027.yaml
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
