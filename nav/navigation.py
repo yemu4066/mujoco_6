@@ -180,6 +180,7 @@ class Navigation:
         self._scan_dirty = False
         self._last_replan = 0.0
         self.replan_interval = 0.4        # 最快重规划间隔 [s]
+        self.blocked_retry_interval = 0.6 # 被堵死时多久重试一次 [s]
         self.obstacle_clearance = 0.05    # 动态障碍额外余量 [m]
 
         # ---- MPC ----
@@ -245,8 +246,12 @@ class Navigation:
         # 起点**强制**可通行：车就在这儿，不管图上怎么说都必须从这儿出发。
         # 之前用 nearest_free 找 40 cm 内的空格，车停在围栏旁或被动态障碍
         # 的膨胀覆盖时，找不到空格就直接规划失败 —— 表现为"发了目标车不动"。
-        plan_cost[max(0, sj - 1):min(height, sj + 2),
-                  max(0, si - 1):min(width, si + 2)] = 0
+        # ★ 开洞半径要覆盖车体外接圆，不能只开 3x3（15 cm）。
+        #   动态障碍的膨胀半径是 0.50 m：车一旦冲进去，3x3 的洞外面全是
+        #   LETHAL，A* 从起点就迈不出去 → 无解 → _blocked 永久卡死。
+        r_open = max(1, int(math.ceil(self.car_sweep_radius / spec.resolution)))
+        plan_cost[max(0, sj - r_open):min(height, sj + r_open + 1),
+                  max(0, si - r_open):min(width, si + r_open + 1)] = 0
         s = (si, sj)
 
         # 终点允许吸附：用户可能点到了围栏上
@@ -333,7 +338,18 @@ class Navigation:
                 self._blocked = False
 
         if self._blocked:
-            return (0.0, 0.0, 0.0)
+            # ★ 被堵住时必须定期重试，否则永久卡死。
+            #   障碍移开、或者车被推到别处之后，这里不重试就永远醒不过来。
+            if (self._goal is not None
+                    and time.time() - self._last_replan > self.blocked_retry_interval):
+                self._last_replan = time.time()
+                if self.set_goal(self._goal[0], self._goal[1], self._goal[2],
+                                 pose=self._last_pose):
+                    self._blocked = False
+                else:
+                    return (0.0, 0.0, 0.0)
+            else:
+                return (0.0, 0.0, 0.0)
 
         # ---- 横向偏差监控 ----
         # 这是"车实际偏离规划路径多少"，和 MPC 代价里那个 lateral_err
@@ -592,6 +608,9 @@ class Navigation:
             self._manual_points = np.vstack([self._manual_points, ring])
         self._manual_centers.append((float(x), float(y), float(radius)))
         self._scan_dirty = True
+        # 手动障碍是"立刻出现"的，不该再等 replan_interval —— 等 0.4 s
+        # 车已经开过去 0.5 m 了。
+        self._last_replan = 0.0
 
     def clear_manual_obstacles(self) -> None:
         """清空手动加的障碍（不动感知层的）。"""
