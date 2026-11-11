@@ -26,7 +26,8 @@ import sys
 
 import numpy as np
 import rclpy
-from geometry_msgs.msg import PoseStamped, Twist
+from geometry_msgs.msg import PointStamped, PoseStamped, Twist
+from std_msgs.msg import Empty
 from nav_msgs.msg import Odometry, OccupancyGrid, Path
 from sensor_msgs.msg import LaserScan
 from rclpy.node import Node
@@ -67,6 +68,13 @@ class NavNode(Node):
         self.create_subscription(LaserScan, 'scan', self._on_scan, 10)
         # 仿真：障碍真值（没有雷达时用它测避障逻辑）
         self.create_subscription(ObstacleArray, '/obstacles', self._on_obstacles, 10)
+        # 调试：Foxglove 3D 面板点一下就在那儿放个障碍，用来测重规划。
+        # 发 geometry_msgs/PointStamped 到 /debug_obstacle（累加），
+        # 发 std_msgs/Empty 到 /debug_obstacle_clear 清空。
+        self.create_subscription(PointStamped, '/debug_obstacle',
+                                 self._on_debug_obstacle, 10)
+        self.create_subscription(Empty, '/debug_obstacle_clear',
+                                 self._on_debug_clear, 10)
 
         self.pose = None
         self._scan_logged = False
@@ -158,6 +166,18 @@ class NavNode(Node):
                             obs.position.y + r * math.sin(a)))
         if pts:
             self.nav.set_obstacle_points(pts)
+
+    def _on_debug_obstacle(self, msg: PointStamped) -> None:
+        """Foxglove 点选：在 (x, y) 累加一个圆形障碍。"""
+        x, y = float(msg.point.x), float(msg.point.y)
+        self.nav.add_manual_obstacle(x, y)
+        n = 0 if self.nav._manual_points is None else len(self.nav._manual_points)
+        self.get_logger().info(f'[debug] 加障碍 ({x:+.2f}, {y:+.2f})，手动障碍点累计 {n}')
+
+    def _on_debug_clear(self, msg: Empty) -> None:
+        """清空手动障碍。"""
+        self.nav.clear_manual_obstacles()
+        self.get_logger().info('[debug] 已清空手动障碍')
 
     def _on_odom(self, msg: Odometry) -> None:
         p = msg.pose.pose.position

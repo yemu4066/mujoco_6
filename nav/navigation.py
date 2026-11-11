@@ -172,6 +172,9 @@ class Navigation:
         # （两个 mocap 对手），由 nav_node._on_obstacles 转成世界坐标点喂进来。
         self.enable_dynamic_obstacles = True
         self._dynamic_points: np.ndarray | None = None   # (N, 2) 世界坐标
+        # 调试层：手动加的障碍（Foxglove 点选）。和 _dynamic_points 分开存，
+        # 因为 set_scan / set_obstacle_points 是**全量替换**，会把手动加的冲掉。
+        self._manual_points: np.ndarray | None = None
         self._scan_dirty = False
         self._last_replan = 0.0
         self.replan_interval = 0.4        # 最快重规划间隔 [s]
@@ -571,9 +574,39 @@ class Navigation:
         self._dynamic_points = pts
         self._scan_dirty = True
 
+    def add_manual_obstacle(self, x: float, y: float,
+                            radius: float = 0.12) -> None:
+        """调试用：在 (x, y) 加一个圆形障碍，**累加**，不会被感知数据冲掉。
+
+        给 Foxglove 点选测试用。内部按圆周采样成点，和感知进来的障碍
+        走同一套膨胀和挡路判定。
+        """
+        n = max(8, int(round(2 * math.pi * radius / 0.05)))
+        a = np.linspace(0.0, 2.0 * math.pi, n, endpoint=False)
+        ring = np.column_stack([x + radius * np.cos(a), y + radius * np.sin(a)])
+        if self._manual_points is None or len(self._manual_points) == 0:
+            self._manual_points = ring
+        else:
+            self._manual_points = np.vstack([self._manual_points, ring])
+        self._scan_dirty = True
+
+    def clear_manual_obstacles(self) -> None:
+        """清空手动加的障碍（不动感知层的）。"""
+        self._manual_points = None
+        self._scan_dirty = True
+
+    def _all_obstacle_points(self) -> np.ndarray | None:
+        """感知障碍 + 手动障碍合并后的点集。"""
+        parts = [p for p in (self._dynamic_points, self._manual_points)
+                 if p is not None and len(p)]
+        if not parts:
+            return None
+        return parts[0] if len(parts) == 1 else np.vstack(parts)
+
     def clear_obstacles(self) -> None:
         """清空动态障碍。"""
         self._dynamic_points = None
+        self._manual_points = None
         self._scan_dirty = False
 
     @property
@@ -584,7 +617,8 @@ class Navigation:
     def _planning_cost(self) -> np.ndarray:
         """静态代价图 + 动态障碍（只膨胀到 inscribed_radius，避免双重膨胀）。"""
         cost = self._static_cost.copy()
-        if self._dynamic_points is None or len(self._dynamic_points) == 0:
+        pts = self._all_obstacle_points()
+        if pts is None:
             return cost
 
         spec = self.costmap.spec
@@ -594,8 +628,8 @@ class Navigation:
             0, int(round(self.obstacle_clearance / res)))
 
         # 世界坐标 → 栅格索引
-        i = np.round((self._dynamic_points[:, 0] - spec.origin_x) / res).astype(np.int64)
-        j = np.round((self._dynamic_points[:, 1] - spec.origin_y) / res).astype(np.int64)
+        i = np.round((pts[:, 0] - spec.origin_x) / res).astype(np.int64)
+        j = np.round((pts[:, 1] - spec.origin_y) / res).astype(np.int64)
         inside = (i >= 0) & (i < width) & (j >= 0) & (j < height)
         if not inside.any():
             return cost
@@ -622,7 +656,8 @@ class Navigation:
         不能用「看路径后半段」这种近似 —— 障碍挂在 1/3 处时会漏掉。
         正确做法是把车投影到路径上取弧长 s0，只看 s >= s0 的那部分。
         """
-        if self._dynamic_points is None or len(self._dynamic_points) == 0:
+        pts = self._all_obstacle_points()
+        if pts is None:
             return False
 
         end = self.mpc.path_planner
@@ -655,7 +690,7 @@ class Navigation:
         # 取 0.45 m（比 0.50 小 5 cm，留出栅格量化余量）才能真正区分
         # "绕开了"和"障碍压过来了"。
         threshold = 0.45
-        for p in self._dynamic_points:
+        for p in pts:
             d = np.hypot(path[:, 0] - p[0], path[:, 1] - p[1]).min()
             if d < threshold:
                 return True
