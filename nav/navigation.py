@@ -60,9 +60,7 @@ class Navigation:
                  smooth_adaptive: float = 0.58,
                  speed_lookahead: float = 1.2,
                  dalpha_max: float = 3.0,
-                 dv_max: float = 2.0,
-                 straight_kappa: float = 0.3,
-                 straight_boost: float = 0.08) -> None:
+                 dv_max: float = 2.0,) -> None:
         # ---- 地图 ----
         base, occupied = load_map(map_yaml)
         cost = inflate(occupied, base.spec.resolution,
@@ -124,9 +122,6 @@ class Navigation:
         self.car_sweep_radius = 0.5 * math.hypot(self.car_length, self.car_width)
 
         # 余量 = 到墙距离 − 车体外接圆 = **还能横向偏多少不碰车体**
-        self.speed_margin_min = 0.01   # 余量 <= 此值 → 降到 speed_floor
-        self.speed_margin_max = 0.15   # 余量 >= 此值 → 跑满 ref_speed
-        self.speed_floor = 0.35        # 最慢不慢于此
         # 限速前瞻长度 [m]：取 [s_now, s_now+它] 区间内的最小限速
         self.speed_lookahead = float(speed_lookahead)
 
@@ -147,12 +142,6 @@ class Navigation:
         #     v <= sqrt(2 · dv · 可用横向空间)
         self.dv_max = float(dv_max)
 
-        # 直道豁免：曲率小于 straight_kappa（≈R>3.3m）的地方按直道处理，
-        # 等效余量加 straight_boost。斜坡是典型场景 —— 它是 1 m 宽的窄直道，
-        # 却因为两侧有围栏被当成窄门限速。直道不需要转向，MPC 保持直线的
-        # 横向误差比过门小得多，所以同样的余量可以跑得快一点。
-        self.straight_kappa = float(straight_kappa)
-        self.straight_boost = float(straight_boost)
 
         # 最近一帧的横向偏差 [m]，正=偏左（路径法向）。供外部监控/可视化用。
         self.last_lateral = 0.0
@@ -429,28 +418,17 @@ class Navigation:
         dist = np.zeros(len(points), dtype=np.float64)
         dist[ok] = self._dist_field[j[ok], i[ok]]
 
-        # 允许的横向偏差 = 到墙距离 − 车体外接圆（两个分支都要用）
+        # 允许的横向偏差 = 到墙距离 − 车体外接圆（折返制动还要用）
         margin = dist - self.car_sweep_radius
 
-        # 曲率提前算：下面的"直道豁免"和"曲率限速"都要用
+        # 曲率（曲率限速、折返判定都要用）
         kappa = self._curvature(points)
 
-        # ---- 直道豁免 ----
-        # 同样的余量，长直道和窄门的风险不一样：直道不转向，MPC 只要
-        # 保持直线，横向误差远小于过门。判据是曲率（R 很大 = 直道），
-        # 对斜坡这种"窄但是直的"地方生效；极窄处（margin<=0.03）不豁免，
-        # 保住最窄点的安全底线。
-        straight = (kappa < self.straight_kappa) & (margin > 0.03)
-        margin_eff = margin + np.where(straight, self.straight_boost, 0.0)
-
-        span = max(self.speed_margin_max - self.speed_margin_min, 1e-6)
-        ratio = np.clip((margin_eff - self.speed_margin_min) / span, 0.0, 1.0)
-        vmax = self.speed_floor + (self.speed_wide - self.speed_floor) * ratio
-
-        # 前向看一眼：避免"到了才减"。用对称窗口近似，半径约 0.6 m
-        from scipy.ndimage import minimum_filter1d
-        look = max(1, int(round(0.6 / res)))
-        vmax = minimum_filter1d(vmax, size=2 * look + 1, mode='nearest')
+        # ★ 已移除"窄路限速"（横向余量 → 速度的映射）和它的直道豁免。
+        #   原来窄处降到 speed_floor、宽处跑满，是"离墙多近"在限制速度。
+        #   现在速度只由路径的**拐弯**决定：直道一律 speed_wide，弯道按
+        #   曲率/转向速率压，掉头按制动距离压。
+        vmax = np.full(len(points), self.speed_wide, dtype=np.float64)
 
 
         # ---- 曲率限速：两个约束取较严的那个 ----
@@ -491,6 +469,12 @@ class Navigation:
             v_curve = np.where(sharp, v_brake, v_curve)
 
         vmax = np.minimum(vmax, np.maximum(v_curve, self.speed_min))
+
+        # 前后各 0.6 m 取最小：弯道的低速往两侧扩散，避免"到了才减"。
+        # 放在曲率限速之后才有意义——这之前 vmax 是常数 speed_wide。
+        from scipy.ndimage import minimum_filter1d
+        look = max(1, int(round(0.6 / res)))
+        vmax = minimum_filter1d(vmax, size=2 * look + 1, mode='nearest')
 
         # 沿弧长累计，供 update 查表
         seg = np.hypot(np.diff(points[:, 0]), np.diff(points[:, 1]))
