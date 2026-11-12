@@ -47,10 +47,10 @@ class Navigation:
                  inscribed_radius: float = 0.45,
                  inflation_radius: float = 0.90,
                  cost_weight: float = 2.0,
-                 ref_speed: float = 2.0,
+                 ref_speed: float = 4.0,
                  mpc_dt: float = 0.01,
                  mpc_horizon: int = 175,
-                 v_max: float = 4.0,
+                 v_max: float = 5.0,
                  goal_tolerance: float = 0.05,
                  rotate_tolerance: float = 0.05,
                  rotate_gain: float = 2.5,
@@ -60,7 +60,7 @@ class Navigation:
                  smooth_adaptive: float = 0.58,
                  speed_lookahead: float = 1.2,
                  dalpha_max: float = 4.0,
-                 dv_max: float = 2.0,) -> None:
+                 dv_max: float = 3.0,) -> None:
         # ---- 地图 ----
         base, occupied = load_map(map_yaml)
         cost = inflate(occupied, base.spec.resolution,

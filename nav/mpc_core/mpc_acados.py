@@ -208,13 +208,13 @@ class AugmentedSwerveMPC(AcadosMPCBase):
         # v 允许为负：车头锁死后，反向移动靠倒车实现，
         # 否则要求 alpha≈±π，正好卡在约束边界，求解器会退回零解。
         # （试过把 alpha 收到 ±π/2 来消掉 (v,α)/(-v,α+π) 的冗余解，效果不好，已回退）
-        ocp.constraints.lbx = np.array([-4.0, -np.pi, 0.0])
-        ocp.constraints.ubx = np.array([4.0, np.pi, 0.0])
+        ocp.constraints.lbx = np.array([-5.0, -np.pi, 0.0])
+        ocp.constraints.ubx = np.array([5.0, np.pi, 0.0])
         # 控制约束 [dv, dalpha, dw]
         ocp.constraints.idxbu = np.arange(3)
         # dw 同样锁 0：控制量也不产生角速度变化
-        ocp.constraints.lbu = np.array([-2.0, -4.0, 0.0])
-        ocp.constraints.ubu = np.array([2.0, 4.0, 0.0])
+        ocp.constraints.lbu = np.array([-3.0, -4.0, 0.0])
+        ocp.constraints.ubu = np.array([3.0, 4.0, 0.0])
         ocp.constraints.x0 = np.zeros(6)
         assert isinstance(ocp.model.x,SX)
         pos_err = ocp.model.x[0:2] - ocp.model.p[0:2]
