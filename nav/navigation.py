@@ -443,20 +443,6 @@ class Navigation:
         look = max(1, int(round(0.6 / res)))
         vmax = minimum_filter1d(vmax, size=2 * look + 1, mode='nearest')
 
-        # ★ 大转角（U 型掉头）后面多压一段。
-        #   直角弯只要 ~0.6 m 车头就转过来了，U 型弯（180°）要 1.2 m；
-        #   固定 0.6 m 会让后半段提前放开速度，车没转完就加速冲出去。
-        theta_h = np.arctan2(np.diff(points[:, 1]), np.diff(points[:, 0]))
-        turn_h = np.zeros(len(points))
-        if len(theta_h) > 1:
-            turn_h[1:-1] = np.abs(np.diff(np.unwrap(theta_h)))
-        big_turn = turn_h > np.radians(45.0)     # 45° 阶梯的单个折正好是 45°，用 > 排除
-        if big_turn.any():
-            look_turn = max(1, int(round(1.2 / res)))
-            for k in range(len(vmax)):
-                j = min(len(vmax), k + look_turn)
-                if big_turn[k:j].any():
-                    vmax[k] = min(vmax[k], float(vmax[big_turn[k:j]].min()))
 
         # ---- 曲率限速：两个约束取较严的那个 ----
         #   ① 横向加速度   v <= sqrt(a_lat · R)
@@ -496,6 +482,26 @@ class Navigation:
             v_curve = np.where(sharp, v_brake, v_curve)
 
         vmax = np.minimum(vmax, np.maximum(v_curve, self.speed_min))
+
+        # ★ 急弯段后面多压一段。
+        #   直角弯只要 ~0.6 m 车头就转过来了，U 型弯（180°）要 1.2 m；
+        #   固定 0.6 m 会让后半段提前放开速度，车没转完就加速冲出去。
+        #
+        #   判据用**曲率**不用单点转角：平滑后的路径是圆弧，每点只转
+        #   7~8°，用 45° 转角阈值永远触发不了（实测完全没生效）。
+        kappa_h = self._curvature(points)
+        sharp_curve = kappa_h > 1.0              # R < 1 m
+        if sharp_curve.any():
+            look_turn = max(1, int(round(0.9 / res)))
+            # 按"连续急弯段"整体处理：取整段的最低速度，从**段末**往后压。
+            # 逐点压不行 —— 圆弧末端的曲率是渐降的，边界那几个点会漏掉。
+            idx_sharp = np.flatnonzero(sharp_curve)
+            starts = idx_sharp[np.r_[True, np.diff(idx_sharp) > 1]]
+            ends = idx_sharp[np.r_[np.diff(idx_sharp) > 1, True]]
+            for a, b in zip(starts, ends):
+                v_seg = float(vmax[a:b + 1].min())
+                j = min(len(vmax), int(b) + look_turn + 1)
+                vmax[b:j] = np.minimum(vmax[b:j], v_seg)
 
         # 沿弧长累计，供 update 查表
         seg = np.hypot(np.diff(points[:, 0]), np.diff(points[:, 1]))
