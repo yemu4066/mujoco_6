@@ -42,8 +42,8 @@ class Navigation:
     """A* 全局规划 + acados MPC 局部跟踪，纯 Python，不依赖 ROS。"""
 
     def __init__(self, map_yaml: str, *,
-                 car_length: float = 0.70,
-                 car_width: float = 0.65,
+                 car_length: float = 0.60,
+                 car_width: float = 0.60,
                  inscribed_radius: float = 0.45,
                  inflation_radius: float = 0.90,
                  cost_weight: float = 2.0,
