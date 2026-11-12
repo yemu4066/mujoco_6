@@ -47,7 +47,7 @@ class Navigation:
                  inscribed_radius: float = 0.43,
                  inflation_radius: float = 0.90,
                  cost_weight: float = 2.0,
-                 ref_speed: float = 1.4,
+                 ref_speed: float = 2.0,
                  mpc_dt: float = 0.01,
                  mpc_horizon: int = 175,
                  v_max: float = 4.0,
