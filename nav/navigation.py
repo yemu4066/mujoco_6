@@ -438,10 +438,25 @@ class Navigation:
         ratio = np.clip((margin_eff - self.speed_margin_min) / span, 0.0, 1.0)
         vmax = self.speed_floor + (self.speed_wide - self.speed_floor) * ratio
 
-        # 前向看一眼：避免"到了才减"。用对称窗口近似，半径约 1.0 m
+        # 前向看一眼：避免"到了才减"。用对称窗口近似，半径约 0.6 m
         from scipy.ndimage import minimum_filter1d
-        look = max(1, int(round(1.0 / res)))
+        look = max(1, int(round(0.6 / res)))
         vmax = minimum_filter1d(vmax, size=2 * look + 1, mode='nearest')
+
+        # ★ 大转角（U 型掉头）后面多压一段。
+        #   直角弯只要 ~0.6 m 车头就转过来了，U 型弯（180°）要 1.2 m；
+        #   固定 0.6 m 会让后半段提前放开速度，车没转完就加速冲出去。
+        theta_h = np.arctan2(np.diff(points[:, 1]), np.diff(points[:, 0]))
+        turn_h = np.zeros(len(points))
+        if len(theta_h) > 1:
+            turn_h[1:-1] = np.abs(np.diff(np.unwrap(theta_h)))
+        big_turn = turn_h > np.radians(45.0)     # 45° 阶梯的单个折正好是 45°，用 > 排除
+        if big_turn.any():
+            look_turn = max(1, int(round(1.2 / res)))
+            for k in range(len(vmax)):
+                j = min(len(vmax), k + look_turn)
+                if big_turn[k:j].any():
+                    vmax[k] = min(vmax[k], float(vmax[big_turn[k:j]].min()))
 
         # ---- 曲率限速：两个约束取较严的那个 ----
         #   ① 横向加速度   v <= sqrt(a_lat · R)
