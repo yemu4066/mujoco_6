@@ -58,7 +58,7 @@ class Navigation:
                  smooth_loss: float = 0.03,
                  smooth_radius: float = 0.35,
                  smooth_adaptive: float = 0.58,
-                 speed_lookahead: float = 2.8,
+                 speed_lookahead: float = 1.6,
                  dalpha_max: float = 4.0,
                  dv_max: float = 3.0,) -> None:
         # ---- 地图 ----
