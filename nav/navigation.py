@@ -58,7 +58,7 @@ class Navigation:
                  smooth_loss: float = 0.03,
                  smooth_radius: float = 0.35,
                  smooth_adaptive: float = 0.58,
-                 speed_lookahead: float = 1.2,
+                 speed_lookahead: float = 2.8,
                  dalpha_max: float = 4.0,
                  dv_max: float = 3.0,) -> None:
         # ---- 地图 ----
@@ -132,6 +132,9 @@ class Navigation:
         #   |α| <= free 不惩罚；超过 free 后线性衰减，到 free+span 时压到 floor。
         # 只在曲率大于 alpha_curve_kappa（R < 2 m）的地方启用 —— 直道不参与
         self.alpha_curve_kappa = 0.50
+        # 曲率限速剖面的前后抹平半径 [m]。原来是 0.6，速度提到 4.0 之后
+        # 0.6 m 只够跑 0.15 s，来不及把弯道低速扩散开，跟着加倍。
+        self.speed_smooth_window = 1.2
         self.alpha_speed_free = 0.20     # rad（约 11°）
         self.alpha_speed_span = 0.90     # rad
         self.alpha_speed_floor = 0.35    # 最低压到 35%
@@ -477,7 +480,7 @@ class Navigation:
         # 前后各 0.6 m 取最小：弯道的低速往两侧扩散，避免"到了才减"。
         # 放在曲率限速之后才有意义——这之前 vmax 是常数 speed_wide。
         from scipy.ndimage import minimum_filter1d
-        look = max(1, int(round(0.6 / res)))
+        look = max(1, int(round(self.speed_smooth_window / res)))
         vmax = minimum_filter1d(vmax, size=2 * look + 1, mode='nearest')
 
         # 沿弧长累计，供 update 查表
