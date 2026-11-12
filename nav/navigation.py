@@ -129,6 +129,15 @@ class Navigation:
         self.speed_floor = 0.35        # 最慢不慢于此
         # 限速前瞻长度 [m]：取 [s_now, s_now+它] 区间内的最小限速
         self.speed_lookahead = float(speed_lookahead)
+
+        # ---- α 抑制：车头没对正路径方向就不许提速 ----
+        #   限速表只看"路径本身"（余量、曲率），看不到车头还歪着。
+        #   U 型弯出弯后路径已经变直、限速立刻放开，而 α 还要 1 s 才转完，
+        #   车就会斜着加速冲出去。这里用 α 直接压一档。
+        #   |α| <= free 不惩罚；超过 free 后线性衰减，到 free+span 时压到 floor。
+        self.alpha_speed_free = 0.20     # rad（约 11°）
+        self.alpha_speed_span = 0.90     # rad
+        self.alpha_speed_floor = 0.35    # 最低压到 35%
         # 转向角速率的物理上限 [rad/s]，要和 mpc_acados.py 里 dα 的约束一致。
         # 车头锁死时拐弯全靠 α：v/R <= dα → 弯道速度上限 = dα·R。
         self.dalpha_max = float(dalpha_max)
@@ -539,7 +548,19 @@ class Navigation:
         k0 = max(0, min(k0, len(self._path_vmax) - 1))
         k1 = max(k1, k0 + 1)
         k1 = min(k1, len(self._path_vmax))
-        self.mpc.ref_speed = float(self._path_vmax[k0:k1].min())
+        ref = float(self._path_vmax[k0:k1].min())
+
+        # ★ α 抑制（见 __init__ 里的说明）
+        try:
+            alpha = float(self.mpc.last_aug_state[1])
+        except Exception:                      # noqa: BLE001 - 平滑绝不该让控制失败
+            alpha = 0.0
+        over = abs(alpha) - self.alpha_speed_free
+        if over > 0.0:
+            ref *= max(self.alpha_speed_floor,
+                       1.0 - over / self.alpha_speed_span)
+
+        self.mpc.ref_speed = ref
 
     # ================================================================
     # 动态障碍
