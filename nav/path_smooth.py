@@ -186,6 +186,16 @@ def _fillet(verts: np.ndarray, dist_field, spec, min_clearance: float,
             out.append(b)
             continue
 
+        # ★ 直角（含进门那种 90°）一律不倒角。
+        #   倒角会把拐点"削圆"，路径从"直着进"变成"斜着切"——
+        #   门口/通道的单边余量本来就窄，一斜就蹭墙。
+        #   窄处靠上面的 adaptive 已经跳过了，这里管的是**宽处**的 90°：
+        #   那些地方 local_min 够大，倒角能成功，但倒出来的斜切对角
+        #   反而更危险。
+        if abs(ang - math.pi / 2.0) < math.radians(15.0):
+            out.append(b)
+            continue
+
         # 从 radius 开始，放不下就逐步缩小
         placed = False
         for R in (radius, radius * 0.75, radius * 0.5, radius * 0.35):
