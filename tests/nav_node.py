@@ -27,7 +27,7 @@ import sys
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PointStamped, PoseStamped, Twist
-from std_msgs.msg import Empty
+from std_msgs.msg import Empty, Float32MultiArray
 from visualization_msgs.msg import Marker, MarkerArray
 from nav_msgs.msg import Odometry, OccupancyGrid, Path
 from sensor_msgs.msg import LaserScan
@@ -84,6 +84,10 @@ class NavNode(Node):
         # 手动障碍可视化：Foxglove 里加完能看见在哪儿
         self.debug_obs_pub = self.create_publisher(
             MarkerArray, '/debug_obstacles', 10)
+        # 实时速率：数值给 Plot 面板，文字浮在车顶给 3D 面板
+        self.speed_pub = self.create_publisher(Float32MultiArray, '/speed', 10)
+        self.speed_label_pub = self.create_publisher(
+            MarkerArray, '/speed_label', 10)
 
         self.create_subscription(PoseStamped, '/goal_pose', self._on_goal, 10)
         self.create_subscription(Odometry, '/odom', self._on_odom, 20)
@@ -203,6 +207,42 @@ class NavNode(Node):
         self.nav.clear_manual_obstacles()
         self.get_logger().info('[debug] 已清空手动障碍')
 
+    def _publish_speed(self, vx: float, vy: float, speed: float) -> None:
+        """发布实时速率：数值 /speed（画曲线）+ 文字 /speed_label（3D 里看）。"""
+        try:
+            ref = float(self.nav.mpc.ref_speed)
+        except Exception:                      # noqa: BLE001
+            ref = 0.0
+        try:
+            v_mpc = float(self.nav.mpc.last_aug_state[0])
+        except Exception:                      # noqa: BLE001
+            v_mpc = 0.0
+
+        # 数值：Plot 面板可以直接画
+        arr = Float32MultiArray()
+        arr.data = [speed, vx, vy, ref, v_mpc]
+        self.speed_pub.publish(arr)
+
+        # 文字：浮在车顶上方
+        m = Marker()
+        m.header.frame_id = 'map'
+        m.header.stamp = self.get_clock().now().to_msg()
+        m.ns = 'speed'
+        m.id = 0
+        m.type = Marker.TEXT_VIEW_FACING
+        m.action = Marker.ADD
+        m.pose.position.x = float(self.pose[0])
+        m.pose.position.y = float(self.pose[1])
+        m.pose.position.z = 1.20
+        m.pose.orientation.w = 1.0
+        m.scale.z = 0.20                       # 字高
+        m.color.r, m.color.g, m.color.b, m.color.a = 0.1, 1.0, 0.3, 1.0
+        m.text = (f'{speed:.2f} m/s\n'
+                  f'ref {ref:.2f}  v_mpc {v_mpc:.2f}')
+        arr2 = MarkerArray()
+        arr2.markers.append(m)
+        self.speed_label_pub.publish(arr2)
+
     def _publish_debug_obstacles(self) -> None:
         """把手动障碍画成 Marker，让人在 Foxglove 里看得见。"""
         centers = getattr(self.nav, '_manual_centers', None) or []
@@ -263,6 +303,13 @@ class NavNode(Node):
     def _on_odom(self, msg: Odometry) -> None:
         p = msg.pose.pose.position
         self.pose = (float(p.x), float(p.y), yaw_of(msg.pose.pose.orientation))
+
+        # ---- 实时速率 ----
+        # odom.twist 是世界系的（仿真桥直接取 body 的世界系线速度）
+        vx = float(msg.twist.twist.linear.x)
+        vy = float(msg.twist.twist.linear.y)
+        speed = math.hypot(vx, vy)
+        self._publish_speed(vx, vy, speed)
 
         if self.nav.phase == 'IDLE':
             return

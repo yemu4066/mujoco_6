@@ -130,6 +130,8 @@ class Navigation:
         #   U 型弯出弯后路径已经变直、限速立刻放开，而 α 还要 1 s 才转完，
         #   车就会斜着加速冲出去。这里用 α 直接压一档。
         #   |α| <= free 不惩罚；超过 free 后线性衰减，到 free+span 时压到 floor。
+        # 只在曲率大于 alpha_curve_kappa（R < 2 m）的地方启用 —— 直道不参与
+        self.alpha_curve_kappa = 0.50
         self.alpha_speed_free = 0.20     # rad（约 11°）
         self.alpha_speed_span = 0.90     # rad
         self.alpha_speed_floor = 0.35    # 最低压到 35%
@@ -159,6 +161,7 @@ class Navigation:
         # 路径上每点的限速（set_goal 时算）
         self._path_s: np.ndarray | None = None
         self._path_vmax: np.ndarray | None = None
+        self._path_kappa: np.ndarray | None = None
 
         # ---- 动态障碍（雷达）----
         # 动态避障总开关。默认关闭 —— 底盘还没接雷达时不会有任何数据，
@@ -423,6 +426,7 @@ class Navigation:
 
         # 曲率（曲率限速、折返判定都要用）
         kappa = self._curvature(points)
+        self._path_kappa = kappa          # 供 _apply_speed_limit 的 α 抑制判据用
 
         # ★ 已移除"窄路限速"（横向余量 → 速度的映射）和它的直道豁免。
         #   原来窄处降到 speed_floor、宽处跑满，是"离墙多近"在限制速度。
@@ -534,15 +538,21 @@ class Navigation:
         k1 = min(k1, len(self._path_vmax))
         ref = float(self._path_vmax[k0:k1].min())
 
-        # ★ α 抑制（见 __init__ 里的说明）
-        try:
-            alpha = float(self.mpc.last_aug_state[1])
-        except Exception:                      # noqa: BLE001 - 平滑绝不该让控制失败
-            alpha = 0.0
-        over = abs(alpha) - self.alpha_speed_free
-        if over > 0.0:
-            ref *= max(self.alpha_speed_floor,
-                       1.0 - over / self.alpha_speed_span)
+        # ★ α 抑制（见 __init__ 里的说明），**只在弯道附近启用**。
+        #   直道上车头朝向不该影响速度：起步时车头没对准、或刚出弯 α 还没
+        #   归零，都会让整段直道被误压。
+        kappa_local = (float(self._path_kappa[k0])
+                       if self._path_kappa is not None
+                       and 0 <= k0 < len(self._path_kappa) else 0.0)
+        if kappa_local > self.alpha_curve_kappa:
+            try:
+                alpha = float(self.mpc.last_aug_state[1])
+            except Exception:                  # noqa: BLE001 - 平滑绝不该让控制失败
+                alpha = 0.0
+            over = abs(alpha) - self.alpha_speed_free
+            if over > 0.0:
+                ref *= max(self.alpha_speed_floor,
+                           1.0 - over / self.alpha_speed_span)
 
         self.mpc.ref_speed = ref
 
