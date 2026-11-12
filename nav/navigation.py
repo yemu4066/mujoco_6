@@ -170,7 +170,7 @@ class Navigation:
         # update() 里才会做「障碍挡路 → 重规划」。
         # 数据源：真机是 LaserScan；仿真是 mujoco_node 发布的 /obstacles
         # （两个 mocap 对手），由 nav_node._on_obstacles 转成世界坐标点喂进来。
-        self.enable_dynamic_obstacles = True
+        self.enable_dynamic_obstacles = False
         self._dynamic_points: np.ndarray | None = None   # (N, 2) 世界坐标
         # 调试层：手动加的障碍（Foxglove 点选）。和 _dynamic_points 分开存，
         # 因为 set_scan / set_obstacle_points 是**全量替换**，会把手动加的冲掉。
@@ -438,9 +438,9 @@ class Navigation:
         ratio = np.clip((margin_eff - self.speed_margin_min) / span, 0.0, 1.0)
         vmax = self.speed_floor + (self.speed_wide - self.speed_floor) * ratio
 
-        # 前向看一眼：避免"到了才减"。用对称窗口近似，半径约 0.6 m
+        # 前向看一眼：避免"到了才减"。用对称窗口近似，半径约 1.0 m
         from scipy.ndimage import minimum_filter1d
-        look = max(1, int(round(0.6 / res)))
+        look = max(1, int(round(1.0 / res)))
         vmax = minimum_filter1d(vmax, size=2 * look + 1, mode='nearest')
 
         # ---- 曲率限速：两个约束取较严的那个 ----
@@ -599,6 +599,8 @@ class Navigation:
         给 Foxglove 点选测试用。内部按圆周采样成点，和感知进来的障碍
         走同一套膨胀和挡路判定。
         """
+        if not self.enable_dynamic_obstacles:
+            return
         n = max(8, int(round(2 * math.pi * radius / 0.05)))
         a = np.linspace(0.0, 2.0 * math.pi, n, endpoint=False)
         ring = np.column_stack([x + radius * np.cos(a), y + radius * np.sin(a)])
