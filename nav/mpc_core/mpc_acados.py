@@ -213,8 +213,8 @@ class AugmentedSwerveMPC(AcadosMPCBase):
         # 控制约束 [dv, dalpha, dw]
         ocp.constraints.idxbu = np.arange(3)
         # dw 同样锁 0：控制量也不产生角速度变化
-        ocp.constraints.lbu = np.array([-2.0, -3.0, 0.0])
-        ocp.constraints.ubu = np.array([2.0, 3.0, 0.0])
+        ocp.constraints.lbu = np.array([-2.0, -4.0, 0.0])
+        ocp.constraints.ubu = np.array([2.0, 4.0, 0.0])
         ocp.constraints.x0 = np.zeros(6)
         assert isinstance(ocp.model.x,SX)
         pos_err = ocp.model.x[0:2] - ocp.model.p[0:2]
