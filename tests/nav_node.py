@@ -102,8 +102,13 @@ class NavNode(Node):
                                  self._on_debug_obstacle, 10)
         self.create_subscription(Empty, '/debug_obstacle_clear',
                                  self._on_debug_clear, 10)
+        # 起步前等四个轮子转向角对齐
+        self.create_subscription(Float32MultiArray, '/wheel_angles',
+                                 self._on_wheel_angles, 10)
 
         self.pose = None
+        self._wheel_angles = None          # 四个轮子的转向角 [rad]
+        self.wheel_align_tol = 0.087       # 5° 内认为对齐
         self._scan_logged = False
         self._has_scan = False
         self.obstacle_z_max = 1.0    # 高于这个高度的障碍忽略（够不着）
@@ -206,6 +211,18 @@ class NavNode(Node):
         """清空手动障碍。"""
         self.nav.clear_manual_obstacles()
         self.get_logger().info('[debug] 已清空手动障碍')
+
+    def _on_wheel_angles(self, msg: Float32MultiArray) -> None:
+        self._wheel_angles = list(msg.data)
+
+    def _wheels_aligned(self) -> bool:
+        """四个轮子的转向角是否一致（都指向同一方向）。"""
+        a = self._wheel_angles
+        if not a or len(a) < 4:
+            return True                      # 没收到就不拦
+        ref = a[0]
+        return all(abs(math.atan2(math.sin(x - ref), math.cos(x - ref)))
+                   < self.wheel_align_tol for x in a[1:])
 
     def _publish_speed(self, vx: float, vy: float, speed: float) -> None:
         """发布实时速率：数值 /speed（画曲线）+ 文字 /speed_label（3D 里看）。"""
@@ -312,6 +329,11 @@ class NavNode(Node):
         self._publish_speed(vx, vy, speed)
 
         if self.nav.phase == 'IDLE':
+            return
+
+        # 起步前等四个轮子朝向一致，否则直接发零速度
+        if not self._wheels_aligned():
+            self.cmd_pub.publish(Twist())
             return
 
         cmd = self.nav.update(*self.pose)
