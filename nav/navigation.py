@@ -565,46 +565,8 @@ class Navigation:
         return float((x - ref[0]) * nx + (y - ref[1]) * ny)
 
     def _apply_speed_limit(self) -> None:
-        """按车当前弧长位置设置 MPC 的参考推进速度。"""
-        if self._path_s is None or self._last_pose is None:
-            return
-        end = self.mpc.path_planner
-        if len(end.x_path) == 0:
-            return
-        s_now = end.get_nearest_s(self._last_pose[0], self._last_pose[1])
-        s_now = max(0.0, min(s_now, float(self._path_s[-1])))
-
-        # ★ 直接查表插值，**不再取前方区间的最小值**。
-        #
-        # _build_speed_profile 已经算好了双向制动/加速包络，剖面本身连续且
-        # 物理可行（v² <= v'² + 2a·ds）。这里再套一层"前方 N 米取最小"会把
-        # 包络又压平：表现为弯前很远处就开始匀速 1.2 m/s，而不是先加速后减速。
-        k0 = int(np.searchsorted(self._path_s, s_now))
-        k0 = max(0, min(k0, len(self._path_vmax) - 1))
-        ref = float(np.interp(s_now, self._path_s, self._path_vmax))
-
-        # ★ α 抑制（见 __init__ 里的说明），**只在弯道附近启用**。
-        #   直道上车头朝向不该影响速度：起步时车头没对准、或刚出弯 α 还没
-        #   归零，都会让整段直道被误压。
-        if self._path_kappa is not None and 0 <= k0 < len(self._path_kappa):
-            w = max(1, int(round(self.alpha_window / float(self._path_s[1]
-                                                           - self._path_s[0]))))
-            lo = max(0, k0 - w)
-            hi = min(len(self._path_kappa), k0 + w + 1)
-            kappa_local = float(self._path_kappa[lo:hi].max())
-        else:
-            kappa_local = 0.0
-        if kappa_local > self.alpha_curve_kappa:
-            try:
-                alpha = float(self.mpc.last_aug_state[1])
-            except Exception:                  # noqa: BLE001 - 平滑绝不该让控制失败
-                alpha = 0.0
-            over = abs(alpha) - self.alpha_speed_free
-            if over > 0.0:
-                ref *= max(self.alpha_speed_floor,
-                           1.0 - over / self.alpha_speed_span)
-
-        self.mpc.ref_speed = ref
+        """参考推进速度：恒定，不随路径曲率/包络变化。"""
+        self.mpc.ref_speed = float(self.ref_speed)
 
     # ================================================================
     # 动态障碍
