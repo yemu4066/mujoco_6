@@ -320,10 +320,19 @@ class AugmentedSwerveMPC(AcadosMPCBase):
         dy = ocp.model.x[1] - ocp.model.p[1]
         lateral_err = dx * ocp.model.p[3] + dy * ocp.model.p[4]
 
-        # Cost: [位置(2), 姿态(1), 横向(1), 状态(3), 控制率(3)] = 10
-        ocp.model.cost_y_expr = vertcat(pos_err, wrapped_angle_diff, lateral_err,
+        # ★ 姿态项必须用「运动方向 θ+α」，不是「车头朝向 θ」。
+        #   运动学是 x_dot = v·cos(θ+α)，车往哪儿走由 θ+α 决定。
+        #   而 ω ≡ 0（车头锁死、转不了），所以 wrap(θ − θ_ref) 这个误差
+        #   **永远消不掉**，MPC 只能靠 α 间接补偿；偏偏 W[α]=0，它又不
+        #   关心 α —— 结果出发时 α 停在 0，车沿车头方向走，不沿路径走。
+        #   改成 θ+α 之后，α 会通过这一项被显式优化，运动方向才对得准。
+        heading_err = atan2(sin(ocp.model.x[2] + ocp.model.x[4] - ocp.model.p[2]),
+                            cos(ocp.model.x[2] + ocp.model.x[4] - ocp.model.p[2]))
+
+        # Cost: [位置(2), 运动方向(1), 横向(1), 状态(3), 控制率(3)] = 10
+        ocp.model.cost_y_expr = vertcat(pos_err, heading_err, lateral_err,
                                         ocp.model.x[3:6], ocp.model.u)
-        ocp.model.cost_y_expr_e = vertcat(pos_err, wrapped_angle_diff, lateral_err,
+        ocp.model.cost_y_expr_e = vertcat(pos_err, heading_err, lateral_err,
                                           ocp.model.x[3:6])
         
         ocp.cost.cost_type = ocp.cost.cost_type_e = 'NONLINEAR_LS'
