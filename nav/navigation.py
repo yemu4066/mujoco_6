@@ -132,10 +132,6 @@ class Navigation:
         #   |α| <= free 不惩罚；超过 free 后线性衰减，到 free+span 时压到 floor。
         # 只在曲率大于 alpha_curve_kappa（R < 2 m）的地方启用 —— 直道不参与
         self.alpha_curve_kappa = 0.50
-        # 曲率限速剖面的前后抹平半径 [m]。原来是 0.6，速度提到 4.0 之后
-        # 0.6 m 只够跑 0.15 s，来不及把弯道低速扩散开，跟着加倍。
-        self.speed_smooth_window = 1.2
-
         # ---- 制动包络 ----
         # 规划层用的减速度 [m/s²]，故意小于 MPC 的 dv_max（3.0）：
         # MPC 是渐近逼近，不是 bang-bang，按满打满算会在末端刹不住。
@@ -484,12 +480,6 @@ class Navigation:
 
         vmax = np.minimum(vmax, np.maximum(v_curve, self.speed_min))
 
-        # 前后各 0.6 m 取最小：弯道的低速往两侧扩散，避免"到了才减"。
-        # 放在曲率限速之后才有意义——这之前 vmax 是常数 speed_wide。
-        from scipy.ndimage import minimum_filter1d
-        look = max(1, int(round(self.speed_smooth_window / res)))
-        vmax = minimum_filter1d(vmax, size=2 * look + 1, mode='nearest')
-
         # 沿弧长累计
         seg = np.hypot(np.diff(points[:, 0]), np.diff(points[:, 1]))
         s = np.concatenate(([0.0], np.cumsum(seg)))
@@ -553,24 +543,16 @@ class Navigation:
         if len(end.x_path) == 0:
             return
         s_now = end.get_nearest_s(self._last_pose[0], self._last_pose[1])
+        s_now = max(0.0, min(s_now, float(self._path_s[-1])))
 
-        # ★ 取"当前弧长 → 前方 speed_lookahead 米"这一段里的**最小**限速。
+        # ★ 直接查表插值，**不再取前方区间的最小值**。
         #
-        # 为什么不能用单点：单点只是换个位置去看，如果前瞻末端恰好是宽档，
-        #   看到的还是高速（实测把单点前瞻从 0.6 拉到 1.5，总时间一秒没变）。
-        #   而"直道后紧跟急转弯"的场景里，前方 1.2 m 处限速只有 0.57，
-        #   单点 0.6 m 完全看不到 → 车在直道全速加速 → 到弯口来不及 → 冲出去。
-        #
-        # 为什么是 1.2 m：1.2→0.3 m/s 的减速距离 0.34 m，加 MPC 的响应余量 0.3 m，
-        #   约 0.65 m 是理论下限；实测 0.6→1.0 还有 4% 差别，1.2 m 是稳妥折中
-        #   （总时间 +6%，换来弯前真正降速）。
-        s_end = min(s_now + self.speed_lookahead, self._path_s[-1])
-        k0 = int(np.searchsorted(self._path_s, max(0.0, s_now)))
-        k1 = int(np.searchsorted(self._path_s, s_end))
+        # _build_speed_profile 已经算好了双向制动/加速包络，剖面本身连续且
+        # 物理可行（v² <= v'² + 2a·ds）。这里再套一层"前方 N 米取最小"会把
+        # 包络又压平：表现为弯前很远处就开始匀速 1.2 m/s，而不是先加速后减速。
+        k0 = int(np.searchsorted(self._path_s, s_now))
         k0 = max(0, min(k0, len(self._path_vmax) - 1))
-        k1 = max(k1, k0 + 1)
-        k1 = min(k1, len(self._path_vmax))
-        ref = float(self._path_vmax[k0:k1].min())
+        ref = float(np.interp(s_now, self._path_s, self._path_vmax))
 
         # ★ α 抑制（见 __init__ 里的说明），**只在弯道附近启用**。
         #   直道上车头朝向不该影响速度：起步时车头没对准、或刚出弯 α 还没
