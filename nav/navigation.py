@@ -135,6 +135,13 @@ class Navigation:
         # 曲率限速剖面的前后抹平半径 [m]。原来是 0.6，速度提到 4.0 之后
         # 0.6 m 只够跑 0.15 s，来不及把弯道低速扩散开，跟着加倍。
         self.speed_smooth_window = 1.2
+
+        # ---- 制动包络 ----
+        # 规划层用的减速度 [m/s²]，故意小于 MPC 的 dv_max（3.0）：
+        # MPC 是渐近逼近，不是 bang-bang，按满打满算会在末端刹不住。
+        self.brake_decel = 2.1
+        # 规划层用的加速度 [m/s²]，同样小于 dv_max，避免"理论上一脚到 4.0"。
+        self.accel_plan = 2.0
         self.alpha_speed_free = 0.20     # rad（约 11°）
         self.alpha_speed_span = 0.90     # rad
         self.alpha_speed_floor = 0.35    # 最低压到 35%
@@ -483,11 +490,35 @@ class Navigation:
         look = max(1, int(round(self.speed_smooth_window / res)))
         vmax = minimum_filter1d(vmax, size=2 * look + 1, mode='nearest')
 
-        # 沿弧长累计，供 update 查表
+        # 沿弧长累计
         seg = np.hypot(np.diff(points[:, 0]), np.diff(points[:, 1]))
         s = np.concatenate(([0.0], np.cumsum(seg)))
+
+        # ---- 后向制动包络 ----
+        # 现在"前方有多快"是靠区间最小硬压的，结果是不连续：s_now 一动，
+        # 区间边界扫过低速点，ref 就阶跃一次。
+        # 物理上正确的约束是制动距离：
+        #     v(s)² <= v(s')² + 2·a·(s' − s)   对任意 s' >= s
+        # 从终点往起点扫一遍就等价于取所有 s' 的 min，O(N)。
+        v_raw = vmax.copy()
+        # 后向：刹车够不够（往终点方向扫）
+        for i in range(len(vmax) - 2, -1, -1):
+            ds = float(s[i + 1] - s[i])
+            ceiling = math.sqrt(vmax[i + 1] ** 2 + 2.0 * self.brake_decel * ds)
+            if ceiling < vmax[i]:
+                vmax[i] = ceiling
+        # 前向：加速够不够（往起点方向扫）
+        # 少了这一步，弯道出口会从 1.02 直接跳到 4.00（实测梯度 31.5 m/s²，
+        # 远超物理能力），阶梯照样存在，只是换了个方向。
+        for i in range(1, len(vmax)):
+            ds = float(s[i] - s[i - 1])
+            ceiling = math.sqrt(vmax[i - 1] ** 2 + 2.0 * self.accel_plan * ds)
+            if ceiling < vmax[i]:
+                vmax[i] = ceiling
+
         self._path_s = s
         self._path_vmax = vmax
+        self._path_vmax_raw = v_raw
 
     @staticmethod
     def _curvature(points: np.ndarray) -> np.ndarray:
