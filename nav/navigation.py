@@ -470,12 +470,22 @@ class Navigation:
             # theta 有 n-1 个，diff 之后 n-2 个，正好对应 turn[1..n-2]
             # （turn[k] = 第 k-1 段与第 k 段之间的转角）
             turn[1:-1] = np.abs(np.diff(np.unwrap(theta)))
-        # 阈值取 30°：平滑出来的圆弧拐角，单点转角只有 arctan 步长/半径
-        # ≈ 0.05/0.35 ≈ 8°；而真正 "平滑器放不下圆弧、被迫留下的尖角"
-        # 单点转角是 45°~180°。两者差一个数量级，30° 能干净分开。
-        sharp = turn > np.radians(30.0)
+        # ★ 只有"真折返"才走制动距离，阈值必须开到 150°。
+        #
+        #   折返的定义是"路走不下去了、得原路返回"——两段平行反向，
+        #   单点转角接近 180°，车靠 v 变号（α 不用变、车头不转）。
+        #   这种地方不存在转弯半径，曲率算出来是采样假象（R≈5 cm）。
+        #
+        #   而"圆弧转过 90°"是**真正的弯道**，有明确的半径，必须走曲率限速。
+        #   原来阈值取 30°，结果：只要 margin 够大，v_brake = sqrt(2·dv·margin)
+        #   就给到 2.4~5.2，把曲率限速的 0.45~1.0 彻底覆盖 → 弯道不掉速 → 冲出去。
+        sharp = turn > np.radians(150.0)
         if sharp.any():
             v_brake = np.sqrt(2.0 * self.dv_max * np.maximum(margin, 1e-3))
+            # 这里必须**替换**不是取 min：折返处的曲率是采样假象
+            # （两段平行反向 → R≈2 mm → v_steer≈0.008），取 min 会把它
+            # 算进去，再被 speed_min 兜到 0.20，等于原地刹停。
+            # 90° 圆弧因为阈值已经开到 150°，根本不会进这个分支。
             v_curve = np.where(sharp, v_brake, v_curve)
 
         vmax = np.minimum(vmax, np.maximum(v_curve, self.speed_min))
