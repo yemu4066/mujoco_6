@@ -141,9 +141,9 @@ class Navigation:
         # ---- 制动包络 ----
         # 规划层用的减速度 [m/s²]，故意小于 MPC 的 dv_max（3.0）：
         # MPC 是渐近逼近，不是 bang-bang，按满打满算会在末端刹不住。
-        self.brake_decel = 2.8
+        self.brake_decel = 3.0
         # 规划层用的加速度 [m/s²]，同样小于 dv_max，避免"理论上一脚到 4.0"。
-        self.accel_plan = 2.8
+        self.accel_plan = 3.0
         self.alpha_speed_free = 0.20     # rad（约 11°）
         self.alpha_speed_span = 0.90     # rad
         self.alpha_speed_floor = 0.35    # 最低压到 35%
@@ -511,7 +511,7 @@ class Navigation:
         #   不设的话：终点 vmax 保持 speed_wide（实测 3.75），后向扫描从
         #   它出发往前推，结果整条路径末段速度是**往上爬**的（3.40→3.75），
         #   车到终点不但不减速，还在加速 → 冲过头。
-        vmax[-1] = 0.0
+        vmax[-1] = self.speed_min
 
         # 后向：刹车够不够（往终点方向扫）
         for i in range(len(vmax) - 2, -1, -1):
