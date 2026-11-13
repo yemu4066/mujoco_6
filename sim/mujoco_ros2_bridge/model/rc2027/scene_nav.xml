@@ -630,7 +630,7 @@
 
         <!-- <geom name="chassis_visual_center" type="box" size="0.4 0.4 0.04" pos="-0.02 0 0" rgba="0.8 0.3 0.3 1" contype="0" conaffinity="0" mass="0"/> -->
         <!-- <geom name="chassis_visual_rear" type="box" size="0.16 0.14 0.03" pos="-0.18 0 0.04" rgba="0.8 0.3 0.3 1" contype="0" conaffinity="0" mass="0"/> -->
-        <geom name="chassis_mass" type="box" size="0.30 0.20 0.04" pos="0.10 0.03 0.0" rgba="0.8 0.3 0.3 0" mass="16" contype="0" conaffinity="0"/>
+        <geom name="chassis_mass" type="box" size="0.30 0.20 0.04" pos="0.10 0.03 0.0" rgba="0.8 0.3 0.3 0" mass="300" contype="0" conaffinity="0"/>
         <!-- 与 650 视觉方块一致的碰撞体：参与物理碰撞，解决“车身穿墙” -->
         <geom name="chassis_collision" type="box" size="0.300 0.300 0.08" pos="0 0 -0.02"
               rgba="0 0 0 0" mass="0" contype="1" conaffinity="1" group="1"
