@@ -66,6 +66,9 @@ class AcadosMPCBase(ABC):
         # v 上限 = |ref_speed| × margin，再夹到 floor 以上（保证折返/低速时不至于卡死）
         self.v_cap_margin = 1.20
         self.v_cap_floor = 0.60
+        self._vcap_failed = False
+        self._vcap_applied = False
+        self._vcap_dim = None
         self.use_stage_decay = True          # 待探测
         self._stage_decay_probed = False
         self._W_base = np.array(ocp.cost.W, dtype=float, copy=True)
@@ -86,6 +89,39 @@ class AcadosMPCBase(ABC):
         # ocp.model.c
         json_name = f"mpc_ocp.json"
         return AcadosOcpSolver(ocp, json_file=json_name, verbose=False)
+    def _apply_vcap(self, lb3: np.ndarray, ub3: np.ndarray) -> None:
+        """按 ref_speed 设置各 stage 的 v 上限。
+
+        idxbx 只约束 v/α/ω（3 个），但部分 acados 版本的 ubx setter 期望
+        **全长**（nx=6）。这里两种都试，先成功的记住。
+        """
+        if self._vcap_dim is None:
+            for dim, lb, ub in (
+                (3, lb3, ub3),
+                (6, np.concatenate([[-1e9, -1e9, -1e9], lb3]),
+                    np.concatenate([[1e9, 1e9, 1e9], ub3])),
+            ):
+                try:
+                    self.solver.set(1, "lbx", lb)
+                    self.solver.set(1, "ubx", ub)
+                    self._vcap_dim = dim
+                    print(f'[MPC] v 上限跟随 ref_speed 已启用（维度 {dim}）')
+                    break
+                except Exception:                        # noqa: BLE001
+                    continue
+            if self._vcap_dim is None:
+                raise RuntimeError('3 维和 6 维都不行')
+
+        if self._vcap_dim == 3:
+            lb, ub = lb3, ub3
+        else:
+            lb = np.concatenate([[-1e9, -1e9, -1e9], lb3])
+            ub = np.concatenate([[1e9, 1e9, 1e9], ub3])
+        for k in range(1, self.n_horizon + 1):
+            self.solver.set(k, "lbx", lb)
+            self.solver.set(k, "ubx", ub)
+        self._vcap_applied = True
+
     def _apply_stage_decay(self) -> None:
         """按指数衰减依次设置每个 stage 的 W；不支持就退回均匀权重。"""
         if not self.use_stage_decay or self._stage_decay_probed:
@@ -138,14 +174,18 @@ class AcadosMPCBase(ABC):
         #   去"追"参考点 —— 需要的向心加速度 v²/R 高达 45 m/s²，
         #   α 根本转不过来，车沿切线飞出弯道外侧。
         #  （这解释了"为什么是冲出外侧而不是切内角撞内侧"）
-        if self.following:
+        if self.following and not self._vcap_failed:
             v_cap = abs(float(self.ref_speed)) * self.v_cap_margin
             v_cap = max(v_cap, self.v_cap_floor)
+            # idxbx 只选了 v/α/ω 三个状态，所以 lbx/ubx 必须是长度 3
             lb = np.array([-v_cap, -math.pi, 0.0])
             ub = np.array([v_cap, math.pi, 0.0])
-            for k in range(1, self.n_horizon + 1):     # k=0 是初值，不能覆盖
-                self.solver.set(k, "lbx", lb)
-                self.solver.set(k, "ubx", ub)
+            try:
+                self._apply_vcap(lb, ub)
+            except Exception as exc:                     # noqa: BLE001
+                # 一旦失败就永久放弃，绝不能每帧抛异常把控制卡死
+                self._vcap_failed = True
+                print(f'[MPC] v 上限跟随 ref_speed 设置失败，退回固定约束（{exc}）')
 
         self.solver.set(0, "lbx", x_current)
         self.solver.set(0, "ubx", x_current)
