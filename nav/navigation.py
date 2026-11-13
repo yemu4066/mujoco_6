@@ -132,6 +132,12 @@ class Navigation:
         #   |α| <= free 不惩罚；超过 free 后线性衰减，到 free+span 时压到 floor。
         # 只在曲率大于 alpha_curve_kappa（R < 2 m）的地方启用 —— 直道不参与
         self.alpha_curve_kappa = 0.50
+        # α 抑制的"曲率窗口"半径 [m]。
+        # 判据不能只看当前点：出弯后 0.3 m 曲率就掉到 0.1，而车头 α 从
+        # 90° 归零要 0.39 s（dα=4.0），4 m/s 下要走 1.56 m。只看当前点
+        # 会在出弯瞬间关掉抑制，车斜着加速冲出去。
+        # 取前后各 1.5 m 窗口内的**最大**曲率，让抑制在出弯后自然延续。
+        self.alpha_window = 1.5
         # ---- 制动包络 ----
         # 规划层用的减速度 [m/s²]，故意小于 MPC 的 dv_max（3.0）：
         # MPC 是渐近逼近，不是 bang-bang，按满打满算会在末端刹不住。
@@ -501,12 +507,25 @@ class Navigation:
         #     v(s)² <= v(s')² + 2·a·(s' − s)   对任意 s' >= s
         # 从终点往起点扫一遍就等价于取所有 s' 的 min，O(N)。
         v_raw = vmax.copy()
+        # ★ 终点必须停车，这是包络的边界条件。
+        #   不设的话：终点 vmax 保持 speed_wide（实测 3.75），后向扫描从
+        #   它出发往前推，结果整条路径末段速度是**往上爬**的（3.40→3.75），
+        #   车到终点不但不减速，还在加速 → 冲过头。
+        vmax[-1] = 0.0
+
         # 后向：刹车够不够（往终点方向扫）
         for i in range(len(vmax) - 2, -1, -1):
             ds = float(s[i + 1] - s[i])
             ceiling = math.sqrt(vmax[i + 1] ** 2 + 2.0 * self.brake_decel * ds)
             if ceiling < vmax[i]:
                 vmax[i] = ceiling
+        # ★ 起点同理：车起步时速度是 0，不该一上来就要求 4.0。
+        #   但起点不强制为 0 —— 如果任务是从运动状态接管的，硬压到 0 会急刹。
+        #   改成"取包络值与起点实际可达值"，由后续 update 自然处理。
+        vmax[0] = min(vmax[0], math.sqrt(max(vmax[1], 0.0) ** 2
+                                          + 2.0 * self.accel_plan
+                                          * max(float(s[1] - s[0]), 1e-6)))
+
         # 前向：加速够不够（往起点方向扫）
         # 少了这一步，弯道出口会从 1.02 直接跳到 4.00（实测梯度 31.5 m/s²，
         # 远超物理能力），阶梯照样存在，只是换了个方向。
@@ -567,9 +586,14 @@ class Navigation:
         # ★ α 抑制（见 __init__ 里的说明），**只在弯道附近启用**。
         #   直道上车头朝向不该影响速度：起步时车头没对准、或刚出弯 α 还没
         #   归零，都会让整段直道被误压。
-        kappa_local = (float(self._path_kappa[k0])
-                       if self._path_kappa is not None
-                       and 0 <= k0 < len(self._path_kappa) else 0.0)
+        if self._path_kappa is not None and 0 <= k0 < len(self._path_kappa):
+            w = max(1, int(round(self.alpha_window / float(self._path_s[1]
+                                                           - self._path_s[0]))))
+            lo = max(0, k0 - w)
+            hi = min(len(self._path_kappa), k0 + w + 1)
+            kappa_local = float(self._path_kappa[lo:hi].max())
+        else:
+            kappa_local = 0.0
         if kappa_local > self.alpha_curve_kappa:
             try:
                 alpha = float(self.mpc.last_aug_state[1])
