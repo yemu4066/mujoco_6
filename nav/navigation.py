@@ -139,9 +139,9 @@ class Navigation:
         # ---- 制动包络 ----
         # 规划层用的减速度 [m/s²]，故意小于 MPC 的 dv_max（3.0）：
         # MPC 是渐近逼近，不是 bang-bang，按满打满算会在末端刹不住。
-        self.brake_decel = 2.1
+        self.brake_decel = 2.8
         # 规划层用的加速度 [m/s²]，同样小于 dv_max，避免"理论上一脚到 4.0"。
-        self.accel_plan = 2.0
+        self.accel_plan = 2.8
         self.alpha_speed_free = 0.20     # rad（约 11°）
         self.alpha_speed_span = 0.90     # rad
         self.alpha_speed_floor = 0.35    # 最低压到 35%
