@@ -63,6 +63,9 @@ class AcadosMPCBase(ABC):
         # acados 是否支持 solver.set(k, "W", ...) 取决于编译配置，
         # 所以先探测：失败就永久退回均匀权重，并打印一次提示。
         self.stage_decay = float(getattr(self, 'stage_decay', 0.013))
+        # v 上限 = |ref_speed| × margin，再夹到 floor 以上（保证折返/低速时不至于卡死）
+        self.v_cap_margin = 1.20
+        self.v_cap_floor = 0.60
         self.use_stage_decay = True          # 待探测
         self._stage_decay_probed = False
         self._W_base = np.array(ocp.cost.W, dtype=float, copy=True)
@@ -128,6 +131,21 @@ class AcadosMPCBase(ABC):
         # 2. 设置当前状态约束
         # 首次求解前探测/应用逐 stage 权重（只做一次）
         self._apply_stage_decay()
+
+        # ★ 让 v 的硬约束跟随 ref_speed。
+        #   原来 lbx/ubx 的 v 分量写死 ±5.0，而 ref_speed 只决定参考点间距，
+        #   完全不影响车速。于是弯道里 ref_speed=1.4 时，车照样能开到 4.0+
+        #   去"追"参考点 —— 需要的向心加速度 v²/R 高达 45 m/s²，
+        #   α 根本转不过来，车沿切线飞出弯道外侧。
+        #  （这解释了"为什么是冲出外侧而不是切内角撞内侧"）
+        if self.following:
+            v_cap = abs(float(self.ref_speed)) * self.v_cap_margin
+            v_cap = max(v_cap, self.v_cap_floor)
+            lb = np.array([-v_cap, -math.pi, 0.0])
+            ub = np.array([v_cap, math.pi, 0.0])
+            for k in range(1, self.n_horizon + 1):     # k=0 是初值，不能覆盖
+                self.solver.set(k, "lbx", lb)
+                self.solver.set(k, "ubx", ub)
 
         self.solver.set(0, "lbx", x_current)
         self.solver.set(0, "ubx", x_current)
