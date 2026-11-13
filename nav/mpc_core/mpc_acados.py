@@ -69,6 +69,8 @@ class AcadosMPCBase(ABC):
         self._vcap_failed = False
         self._vcap_applied = False
         self._vcap_dim = None
+        # 规划层可用的 |dv| 上限，用来把 v_cap 逐 step 放开
+        self.dv_max_spec = 3.0
         self.use_stage_decay = True          # 待探测
         self._stage_decay_probed = False
         self._W_base = np.array(ocp.cost.W, dtype=float, copy=True)
@@ -89,7 +91,8 @@ class AcadosMPCBase(ABC):
         # ocp.model.c
         json_name = f"mpc_ocp.json"
         return AcadosOcpSolver(ocp, json_file=json_name, verbose=False)
-    def _apply_vcap(self, lb3: np.ndarray, ub3: np.ndarray) -> None:
+    def _apply_vcap(self, lb3: np.ndarray, ub3: np.ndarray,
+                    v_now: float, dv_lim: float) -> None:
         """按 ref_speed 设置各 stage 的 v 上限。
 
         idxbx 只约束 v/α/ω（3 个），但部分 acados 版本的 ubx setter 期望
@@ -112,12 +115,24 @@ class AcadosMPCBase(ABC):
             if self._vcap_dim is None:
                 raise RuntimeError('3 维和 6 维都不行')
 
-        if self._vcap_dim == 3:
-            lb, ub = lb3, ub3
-        else:
-            lb = np.concatenate([[-1e9, -1e9, -1e9], lb3])
-            ub = np.concatenate([[1e9, 1e9, 1e9], ub3])
+        # ★ 上限必须逐 step 放开，不能一步到位。
+        #   第 0 步的 v 是当前值（固定），如果下一步就要求 v ≤ v_cap，
+        #   而 v_cap 远小于当前 v，这个约束物理上不可行（dv 每步只允许变
+        #   dv_lim·dt），求解器直接 infeasible → 返回 0 → 车停住。
+        #   实测：v=2.0、v_cap=0.6 时需要 47 步才能降下来。
+        #   正确做法：第 k 步的上限 = min(v_cap, v_now + dv_lim·dt·k)。
+        target = float(ub3[0])
         for k in range(1, self.n_horizon + 1):
+            # 第 k 步 v 最低只能降到 v_now − dv·dt·k（受 dv 约束），
+            # 所以上限不能低于这个值，否则约束物理不可达。
+            reachable_floor = v_now - dv_lim * self.dt * k
+            cap = max(target, reachable_floor)
+            if self._vcap_dim == 3:
+                lb = np.array([-cap, -math.pi, 0.0])
+                ub = np.array([cap, math.pi, 0.0])
+            else:
+                lb = np.array([-1e9, -1e9, -1e9, -cap, -math.pi, 0.0])
+                ub = np.array([1e9, 1e9, 1e9, cap, math.pi, 0.0])
             self.solver.set(k, "lbx", lb)
             self.solver.set(k, "ubx", ub)
         self._vcap_applied = True
@@ -181,7 +196,7 @@ class AcadosMPCBase(ABC):
             lb = np.array([-v_cap, -math.pi, 0.0])
             ub = np.array([v_cap, math.pi, 0.0])
             try:
-                self._apply_vcap(lb, ub)
+                self._apply_vcap(lb, ub, float(x_current[3]), float(self.dv_max_spec))
             except Exception as exc:                     # noqa: BLE001
                 # 一旦失败就永久放弃，绝不能每帧抛异常把控制卡死
                 self._vcap_failed = True
