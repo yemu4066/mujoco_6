@@ -1,4 +1,6 @@
 import os
+import math
+
 import numpy as np
 from abc import ABC, abstractmethod
 from casadi import SX, vertcat, cos, sin, atan2
@@ -51,6 +53,19 @@ class AcadosMPCBase(ABC):
         ocp.cost.cost_type_e = 'NONLINEAR_LS'
         # 调用子类特有的权重和约束配置
         self._setup_cost_and_constraints(ocp)
+
+        # ---- 逐 stage 权重衰减（远处参考点权重更低）----
+        # 现状：代价对 176 个 stage 一视同仁，而 ref_speed=4.0 时只有
+        # 7.8% 的参考点落在弯道里，剩下 162 个都在弯后的直线上。
+        # 于是优化器宁可切内角去迁就远处，也不肯老实过弯。
+        # 这里给 W 按指数衰减，让"近处"主导。
+        #
+        # acados 是否支持 solver.set(k, "W", ...) 取决于编译配置，
+        # 所以先探测：失败就永久退回均匀权重，并打印一次提示。
+        self.stage_decay = float(getattr(self, 'stage_decay', 0.013))
+        self.use_stage_decay = True          # 待探测
+        self._stage_decay_probed = False
+        self._W_base = np.array(ocp.cost.W, dtype=float, copy=True)
         assert isinstance(ocp.model.x,SX)
         # 默认初始化参数 p
         ocp.parameter_values = np.zeros(self.np_p)
@@ -68,6 +83,21 @@ class AcadosMPCBase(ABC):
         # ocp.model.c
         json_name = f"mpc_ocp.json"
         return AcadosOcpSolver(ocp, json_file=json_name, verbose=False)
+    def _apply_stage_decay(self) -> None:
+        """按指数衰减依次设置每个 stage 的 W；不支持就退回均匀权重。"""
+        if not self.use_stage_decay or self._stage_decay_probed:
+            return
+        self._stage_decay_probed = True
+        try:
+            for k in range(self.n_horizon):
+                decay = math.exp(-self.stage_decay * k)
+                self.solver.set(k, "W", self._W_base * decay)
+            print(f'[MPC] 逐 stage 权重衰减已启用：lambda={self.stage_decay:.4f}，'
+                  f'末步权重 = {math.exp(-self.stage_decay * (self.n_horizon - 1)):.3f}')
+        except Exception as exc:                     # noqa: BLE001
+            self.use_stage_decay = False
+            print(f'[MPC] 当前 acados 不支持逐 stage 设置 W，退回均匀权重（{exc}）')
+
     def set_path(self, points: np.ndarray, target_yaw: float, ref_speed: float = 1.0):
         """设置跟踪路径"""
         self.path_planner.generate_path(points[:, 0], points[:, 1])
@@ -96,6 +126,9 @@ class AcadosMPCBase(ABC):
             [self.solver.set(k, "p", tp5) for k in range(self.n_horizon + 1)]
 
         # 2. 设置当前状态约束
+        # 首次求解前探测/应用逐 stage 权重（只做一次）
+        self._apply_stage_decay()
+
         self.solver.set(0, "lbx", x_current)
         self.solver.set(0, "ubx", x_current)
 
