@@ -70,21 +70,8 @@ class AcadosMPCBase(ABC):
         self._vcap_dim = None
         # 规划层可用的 |dv| 上限，用来把 v_cap 逐 step 放开
         self.dv_max_spec = 3.0
-        # 曲率加权采样的参数
-        # 参考点覆盖的空间长度：跟原来的 ref_speed×dt×n_horizon 一致（4.0×0.01×175=7.0m）
-        self.view_range = 4.0      # 参考点视野 [m]；None = 动态按 ref_speed 算（7.0m）
-        self.curv_gain = 1.0       # 曲率对密度的加权强度
-        self.kappa_cap = 5.0       # 曲率上限，避免极窄拐角把密度拉爆
-        # 判定"这里是弯道"的曲率阈值：κ > 此值即弯曲，密度会传过去。
-        # 0.2 对应 R < 5 m；直道 κ≈0，不会被穿透。
-        self.straight_kappa = 0.2
-        self._last_effective_view = 0.0
         self.last_ref_points = None      # (N+1, 3) 参考点 (x, y, θ)
         self.last_ref_weights = None     # (N+1,)  每点权重
-        # 弯道之外「缓降」的每步保留比例（点间距约 5cm）：
-        #   0.97 → 0.5m 后 0.74，1.0m 后 0.55，2.0m 后 0.30，3.0m 后 0.16
-        self.density_decay = 0.97
-        self._cur_stage_w = None
         self._W_base = np.array(ocp.cost.W, dtype=float, copy=True)
         assert isinstance(ocp.model.x,SX)
         # 默认初始化参数 p
@@ -151,45 +138,6 @@ class AcadosMPCBase(ABC):
             self.solver.set(k, "ubx", ub)
         self._vcap_applied = True
 
-    def _curvature_density(self) -> np.ndarray:
-        """沿路径的「重要度密度」：曲率大处高，整段弯道一致，出弯后缓降。"""
-        pl = self.path_planner
-        s_path = np.asarray(pl.s_samples, dtype=float)
-        yaw_u = np.asarray(pl.yaw_path_unwrapped, dtype=float)
-        if len(s_path) < 3:
-            return np.ones(max(len(s_path), 2), dtype=float)
-
-        ds = np.maximum(np.diff(s_path), 1e-6)
-        kappa = np.minimum(np.abs(np.diff(yaw_u)) / ds, self.kappa_cap)
-        density = 1.0 + self.curv_gain * kappa
-
-        is_curve = kappa > self.straight_kappa
-        d = density.copy()
-        for k in range(1, len(d)):                    # 弯道内保持一致
-            if is_curve[k - 1]:
-                d[k] = max(d[k], d[k - 1])
-        for k in range(len(d) - 2, -1, -1):
-            if is_curve[k + 1]:
-                d[k] = max(d[k], d[k + 1])
-        for k in range(1, len(d)):                    # 只在弯道之后缓降
-            d[k] = max(d[k], d[k - 1] * self.density_decay)
-        return np.concatenate([d, d[-1:]])
-
-    def _stage_weights(self, s_start: float) -> np.ndarray:
-        """每个 stage 的权重倍率（长度 n_horizon+1）。
-
-        参考点在弧长上**保持均匀**（时间语义不变），权重单独由曲率密度
-        决定，逐 stage 乘到 W 上 —— 这样"更重要"不会顺带改掉"该多快"。
-        """
-        pl = self.path_planner
-        s_path = np.asarray(pl.s_samples, dtype=float)
-        dens = self._curvature_density()
-        if len(s_path) < 2 or len(dens) != len(s_path):
-            return np.ones(self.n_horizon + 1, dtype=float)
-        s_q = s_start + self.ref_speed * self.dt * np.arange(self.n_horizon + 1)
-        s_q = np.clip(s_q, 0.0, float(s_path[-1]))
-        return np.interp(s_q, s_path, dens)
-
     def _curvature_weighted_queries(self, s_start: float) -> np.ndarray:
         """参考点等弧长排布：第 k 个点 = 「k×dt 秒后应到之处」。
 
@@ -217,24 +165,17 @@ class AcadosMPCBase(ABC):
             # 由参考朝向推出路径法向量：切线 (cosθ, sinθ) → 法线 (-sinθ, cosθ)
             cos_t = np.cos(ref_states_all[:, 2])
             sin_t = np.sin(ref_states_all[:, 2])
-            # 逐 stage 权重：曲率密度 → sqrt(w) 塞进 p[5]
-            # acados 不支持 solver.set(k, "W", ...)，所以权重改由 y 缩放实现
-            w = self._stage_weights(s_start)
-            self._cur_stage_w = w
-            self.last_ref_weights = w
-            sqrt_w = np.sqrt(np.clip(w, 0.05, 25.0))
-
-            ref_p = np.column_stack([ref_states_all[:, 0:3], -sin_t, cos_t,
-                                     sqrt_w])  # (n+1, 6)
+            ref_p = np.column_stack([ref_states_all[:, 0:3], -sin_t, cos_t])  # (n+1, 5)
 
             # 存一份参考点，给 foxglove 可视化（nav_node 会发布成 MarkerArray）
             self.last_ref_points = ref_states_all.copy()
+            self.last_ref_weights = None
 
             [self.solver.set(k, "p", ref_p[k]) for k in range(self.n_horizon)]
             self.solver.set(self.n_horizon, "p", ref_p[-1])
         else:
             tp = getattr(self, 'target_point', x_current[:3])
-            tp5 = np.array([tp[0], tp[1], tp[2], 0.0, 0.0, 1.0])   # p[5]=1，不缩放
+            tp5 = np.array([tp[0], tp[1], tp[2], 0.0, 0.0])   # 定点停靠不需要横向约束
             [self.solver.set(k, "p", tp5) for k in range(self.n_horizon + 1)]
 
         # 2. 设置当前状态约束
@@ -344,16 +285,16 @@ class AugmentedSwerveMPC(AcadosMPCBase):
         # 代价维度：位置(2)+姿态(1)+横向(1)+状态(3)+控制(3) = 10
         # 终端：位置(2)+姿态(1)+横向(1)+状态(3) = 7
         self.ny_cost, self.ny_cost_e = 10, 7
-        super().__init__(dt, n_horizon, nx=6, nu=3, np_p=6)
+        super().__init__(dt, n_horizon, nx=6, nu=3, np_p=5)
 
     def _define_model(self):
         model = AcadosModel()
         model.name = "swerve_augmented_model"
         # x = [X, Y, theta, v, alpha, vw]
         # u = [dv, dalpha, dw]
-        # p = [x_ref, y_ref, theta_ref, nx, ny, sqrt(weight)]
+        # p = [x_ref, y_ref, theta_ref, nx, ny]
         #     前 3 个是参考位姿，后 2 个是**路径法向量**，用来算横向偏差
-        x, u, p = SX.sym('x', 6), SX.sym('u', 3), SX.sym('p', 6) #type: ignore
+        x, u, p = SX.sym('x', 6), SX.sym('u', 3), SX.sym('p', 5) #type: ignore
         theta, v, alpha, vw = x[2], x[3], x[4], x[5]
         dv, dalpha, dw = u[0], u[1], u[2]
         
@@ -400,24 +341,11 @@ class AugmentedSwerveMPC(AcadosMPCBase):
         heading_err = atan2(sin(ocp.model.x[2] + ocp.model.x[4] - ocp.model.p[2]),
                             cos(ocp.model.x[2] + ocp.model.x[4] - ocp.model.p[2]))
 
-        # ★ 逐 stage 权重：acados 的 NONLINEAR_LS 把 W 当编译期常量，
-        #   solver.set(k, "W", ...) 会报 'W' is not a valid argument。
-        #   但 y = f(x, u, p) 是可以自由缩放的：
-        #       把 sqrt(w) 乘进位置/横向项，等价于把 w 乘进 W
-        #       W·(sqrt(w)·e)² = W·w·e²
-        #   p[5] 由 Python 侧逐 stage 传入（ref_p[:, 5] = sqrt(w_k)）。
-        sw = ocp.model.p[5]
-
-        # ★ 必须**整条 y 都乘** sw，不能只乘位置/横向那几项。
-        #   只乘部分项会改变代价的内部比例：实测 w=4.14 时运动方向项
-        #   的占比从 3.2% 掉到 0.7%（↓78%），而 α 是唯一的转弯手段，
-        #   方向项变弱 → α 转不够 → 弯道过冲。
-        #   全部乘 sw 的效果是「这个 stage 整体更重要 w 倍」，
-        #   内部各项目的比例不变。
+        # Cost: [位置(2), 运动方向(1), 横向(1), 状态(3), 控制率(3)] = 10
         ocp.model.cost_y_expr = vertcat(pos_err, heading_err, lateral_err,
-                                        ocp.model.x[3:6], ocp.model.u) * sw
+                                        ocp.model.x[3:6], ocp.model.u)
         ocp.model.cost_y_expr_e = vertcat(pos_err, heading_err, lateral_err,
-                                          ocp.model.x[3:6]) * sw
+                                          ocp.model.x[3:6])
         
         ocp.cost.cost_type = ocp.cost.cost_type_e = 'NONLINEAR_LS'
         # 位置权重下调到 0.5：反正有横向项管住"别偏"，不再需要靠位置项硬拉。
