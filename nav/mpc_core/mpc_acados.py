@@ -270,16 +270,10 @@ class AcadosMPCBase(ABC):
             s_queries = self._curvature_weighted_queries(s_start)
             ref_states_all = self.path_planner.get_states_batch(s_queries)
             
-            # 法向量统一取**车当前投影点**的切线法向，所有 stage 共用同一个 n。
-            # 每个 stage 用自己的 θ_ref 时，拐角处相邻 stage 的 n 会转 90°，
-            # 位置差投影到大正值上 —— 往前冲能让它变小，等于奖励进弯前加速。
-            theta0 = float(ref_states_all[0, 2])
-            n0x, n0y = -math.sin(theta0), math.cos(theta0)
-            ref_p = np.column_stack([
-                ref_states_all[:, 0:3],
-                np.full(self.n_horizon + 1, n0x),
-                np.full(self.n_horizon + 1, n0y),
-            ])  # (n+1, 5)
+            # 由参考朝向推出路径法向量：切线 (cosθ, sinθ) → 法线 (-sinθ, cosθ)
+            cos_t = np.cos(ref_states_all[:, 2])
+            sin_t = np.sin(ref_states_all[:, 2])
+            ref_p = np.column_stack([ref_states_all[:, 0:3], -sin_t, cos_t])  # (n+1, 5)
 
             # 存一份参考点，给 foxglove 可视化（nav_node 会发布成 MarkerArray）
             self.last_ref_points = ref_states_all.copy()
