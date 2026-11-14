@@ -522,8 +522,11 @@ class Navigation:
         #     v(s)² <= v(s')² + 2·a·(s' − s)   对任意 s' >= s
         # 从终点往起点扫一遍就等价于取所有 s' 的 min，O(N)。
         v_raw = vmax.copy()
-        # 终点包络已按要求注释掉（不再强制终点速度为 speed_min）。
-        # vmax[-1] = self.speed_min
+        # ★ 终点必须停车，这是包络的边界条件。
+        #   不设的话：终点 vmax 保持 speed_wide（实测 3.75），后向扫描从
+        #   它出发往前推，结果整条路径末段速度是**往上爬**的（3.40→3.75），
+        #   车到终点不但不减速，还在加速 → 冲过头。
+        vmax[-1] = self.speed_min
 
         # 后向：刹车够不够（往终点方向扫）
         for i in range(len(vmax) - 2, -1, -1):

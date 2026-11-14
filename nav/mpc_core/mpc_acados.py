@@ -62,6 +62,7 @@ class AcadosMPCBase(ABC):
         #
         # acados 是否支持 solver.set(k, "W", ...) 取决于编译配置，
         # 所以先探测：失败就永久退回均匀权重，并打印一次提示。
+        self.stage_decay = float(getattr(self, 'stage_decay', 0.013))
         # v 上限 = |ref_speed| × margin，再夹到 floor 以上（保证折返/低速时不至于卡死）
         self.v_cap_margin = 1.20
         self.v_cap_floor = 0.60
@@ -70,8 +71,8 @@ class AcadosMPCBase(ABC):
         self._vcap_dim = None
         # 规划层可用的 |dv| 上限，用来把 v_cap 逐 step 放开
         self.dv_max_spec = 3.0
-        self.last_ref_points = None      # (N+1, 3) 参考点 (x, y, θ)
-        self.last_ref_weights = None     # (N+1,)  每点权重
+        self.use_stage_decay = True          # 待探测
+        self._stage_decay_probed = False
         self._W_base = np.array(ocp.cost.W, dtype=float, copy=True)
         assert isinstance(ocp.model.x,SX)
         # 默认初始化参数 p
@@ -107,7 +108,7 @@ class AcadosMPCBase(ABC):
                     self.solver.set(1, "lbx", lb)
                     self.solver.set(1, "ubx", ub)
                     self._vcap_dim = dim
-                    print(f'[MPC] v 上限跟随 ref_speed 已启用（维度 {dim}）', flush=True)
+                    print(f'[MPC] v 上限跟随 ref_speed 已启用（维度 {dim}）')
                     break
                 except Exception:                        # noqa: BLE001
                     continue
@@ -121,9 +122,7 @@ class AcadosMPCBase(ABC):
         #   实测：v=2.0、v_cap=0.6 时需要 47 步才能降下来。
         #   正确做法：第 k 步的上限 = min(v_cap, v_now + dv_lim·dt·k)。
         target = float(ub3[0])
-        # 注意到 n_horizon（不含）为止：终端 stage 用的是 lbx_e/ubx_e，
-        # 没有 lbx/ubx，对它 set 会报 "mismatching dimension ... dimension 0"。
-        for k in range(1, self.n_horizon):
+        for k in range(1, self.n_horizon + 1):
             # 第 k 步 v 最低只能降到 v_now − dv·dt·k（受 dv 约束），
             # 所以上限不能低于这个值，否则约束物理不可达。
             reachable_floor = v_now - dv_lim * self.dt * k
@@ -138,14 +137,20 @@ class AcadosMPCBase(ABC):
             self.solver.set(k, "ubx", ub)
         self._vcap_applied = True
 
-    def _curvature_weighted_queries(self, s_start: float) -> np.ndarray:
-        """参考点等弧长排布：第 k 个点 = 「k×dt 秒后应到之处」。
-
-        曲率加权（按密度重采样）已停用：那样会打乱时间语义（拐角处
-        点间距被压到 0.8 cm，等于隐含把局部速度目标降低好几倍），
-        在 L1 入口的直角处表现反而更差。恢复原来的等弧长采样。
-        """
-        return s_start + self.ref_speed * self.dt * np.arange(self.n_horizon + 1)
+    def _apply_stage_decay(self) -> None:
+        """按指数衰减依次设置每个 stage 的 W；不支持就退回均匀权重。"""
+        if not self.use_stage_decay or self._stage_decay_probed:
+            return
+        self._stage_decay_probed = True
+        try:
+            for k in range(self.n_horizon):
+                decay = math.exp(-self.stage_decay * k)
+                self.solver.set(k, "W", self._W_base * decay)
+            print(f'[MPC] 逐 stage 权重衰减已启用：lambda={self.stage_decay:.4f}，'
+                  f'末步权重 = {math.exp(-self.stage_decay * (self.n_horizon - 1)):.3f}')
+        except Exception as exc:                     # noqa: BLE001
+            self.use_stage_decay = False
+            print(f'[MPC] 当前 acados 不支持逐 stage 设置 W，退回均匀权重（{exc}）')
 
     def set_path(self, points: np.ndarray, target_yaw: float, ref_speed: float = 1.0):
         """设置跟踪路径"""
@@ -159,17 +164,13 @@ class AcadosMPCBase(ABC):
         # 1. 准备参考轨迹 (使用 p 参数)
         if self.following:
             s_start = self.path_planner.get_nearest_s(x_current[0], x_current[1])
-            s_queries = self._curvature_weighted_queries(s_start)
+            s_queries = s_start + self.ref_speed * self.dt * np.arange(self.n_horizon + 1)
             ref_states_all = self.path_planner.get_states_batch(s_queries)
             
             # 由参考朝向推出路径法向量：切线 (cosθ, sinθ) → 法线 (-sinθ, cosθ)
             cos_t = np.cos(ref_states_all[:, 2])
             sin_t = np.sin(ref_states_all[:, 2])
             ref_p = np.column_stack([ref_states_all[:, 0:3], -sin_t, cos_t])  # (n+1, 5)
-
-            # 存一份参考点，给 foxglove 可视化（nav_node 会发布成 MarkerArray）
-            self.last_ref_points = ref_states_all.copy()
-            self.last_ref_weights = None
 
             [self.solver.set(k, "p", ref_p[k]) for k in range(self.n_horizon)]
             self.solver.set(self.n_horizon, "p", ref_p[-1])
@@ -180,6 +181,8 @@ class AcadosMPCBase(ABC):
 
         # 2. 设置当前状态约束
         # 首次求解前探测/应用逐 stage 权重（只做一次）
+        self._apply_stage_decay()
+
         # ★ 让 v 的硬约束跟随 ref_speed。
         #   原来 lbx/ubx 的 v 分量写死 ±5.0，而 ref_speed 只决定参考点间距，
         #   完全不影响车速。于是弯道里 ref_speed=1.4 时，车照样能开到 4.0+
@@ -197,7 +200,7 @@ class AcadosMPCBase(ABC):
             except Exception as exc:                     # noqa: BLE001
                 # 一旦失败就永久放弃，绝不能每帧抛异常把控制卡死
                 self._vcap_failed = True
-                print(f'[MPC] v 上限跟随 ref_speed 设置失败，退回固定约束（{exc}）', flush=True)
+                print(f'[MPC] v 上限跟随 ref_speed 设置失败，退回固定约束（{exc}）')
 
         self.solver.set(0, "lbx", x_current)
         self.solver.set(0, "ubx", x_current)
