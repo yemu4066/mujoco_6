@@ -79,6 +79,9 @@ class AcadosMPCBase(ABC):
         # 判定"这里是弯道"的曲率阈值：κ > 此值即弯曲，密度会传过去。
         # 0.2 对应 R < 5 m；直道 κ≈0，不会被穿透。
         self.straight_kappa = 0.2
+        # 弯道之外「缓降」的每步保留比例（点间距约 5cm）：
+        #   0.97 → 0.5m 后 0.74，1.0m 后 0.55，2.0m 后 0.30，3.0m 后 0.16
+        self.density_decay = 0.97
         self.use_stage_decay = True          # 待探测
         self._stage_decay_probed = False
         self._W_base = np.array(ocp.cost.W, dtype=float, copy=True)
@@ -211,6 +214,15 @@ class AcadosMPCBase(ABC):
         for k in range(len(d) - 2, -1, -1):               # 前向
             if is_curve[k + 1]:
                 d[k] = max(d[k], d[k + 1])
+
+        # ③ 弯道之外再铺一段「缓降」：高密度按 density_decay 指数衰减着
+        #   蔓延到之后的直道上，而不是一到直道就掉回 1。
+        #   这样弯道出口/斜坡之后的那段直道仍保有略高的权重，轨迹不会在
+        #   刚出弯时立刻松掉；衰减到 1 就自然停止（density 最小是 1）。
+        for k in range(1, len(d)):                        # 后向缓降
+            d[k] = max(d[k], d[k - 1] * self.density_decay)
+        for k in range(len(d) - 2, -1, -1):               # 前向缓降
+            d[k] = max(d[k], d[k + 1] * self.density_decay)
         density = d
 
         cum = np.concatenate(([0.0], np.cumsum(density * ds)))   # 长度 n
