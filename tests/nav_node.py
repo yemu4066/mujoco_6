@@ -115,7 +115,7 @@ class NavNode(Node):
         # 启动时发的那一条 TRANSIENT_LOCAL 历史消息，所以隔一秒再发一次。
         self.create_timer(1.0, lambda: self.map_pub.publish(self._map_msg))
         self.create_timer(0.5, self._publish_debug_obstacles)
-        self.create_timer(0.1, self._publish_mpc_viz)
+        self.create_timer(0.2, self._publish_mpc_viz)   # 5 Hz，减轻 GIL 争用
         self.get_logger().info(
             f'/costmap {self._map_msg.info.width}x{self._map_msg.info.height}，'
             f'自由格 {int((self.nav.costmap.data == 0).sum())}')

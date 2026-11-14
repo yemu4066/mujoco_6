@@ -216,15 +216,20 @@ class AcadosMPCBase(ABC):
             print(f"Warning: {self.__class__.__name__} failed with status {status}")
 
         # 4. 获取结果并转化
-        # 取一条预测轨迹给 foxglove 画（每 4 步取一个点，176 步 → 45 点）
+        # 取一条预测轨迹给 foxglove 画。
+        # ★ 这里每帧只更新一次计数器，真正取数每 10 帧才做一次 ——
+        #   solver.get 是 C 调用，原来每帧 45 次（4500 次/秒）会明显
+        #   推迟指令下发，把 100 Hz 的控制循环拖慢，实测会让控制变差。
+        #   现在 10 Hz × 23 点 = 230 次/秒，开销降到 1/20。
         if self.following:
-            try:
-                step = 4
-                idx = list(range(0, self.n_horizon + 1, step))
-                self.last_pred_traj = np.array(
-                    [self.solver.get(k, "x")[:3] for k in idx])
-            except Exception:                            # noqa: BLE001
-                self.last_pred_traj = None
+            self._viz_tick = getattr(self, '_viz_tick', 0) + 1
+            if self._viz_tick % 10 == 0:
+                try:
+                    idx = list(range(0, self.n_horizon + 1, 8))   # 176 步 → 23 点
+                    self.last_pred_traj = np.array(
+                        [self.solver.get(k, "x")[:3] for k in idx])
+                except Exception:                        # noqa: BLE001
+                    self.last_pred_traj = None
 
         return self._process_output(self.solver.get(0, "u"), self.solver.get(1, "x"))
 class OmniMPC(AcadosMPCBase):
