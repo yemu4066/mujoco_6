@@ -75,9 +75,9 @@ class AcadosMPCBase(ABC):
         self.view_range = 4.0      # 参考点覆盖的空间长度 [m]，与 ref_speed 解耦
         self.curv_gain = 1.0       # 曲率对密度的加权强度
         self.kappa_cap = 5.0       # 曲率上限，避免极窄拐角把密度拉爆
-        # 密度沿路径扩散的衰减率：每 5cm 点保留上一点的这个比例。
-        # 0.90 → 5 点后剩 59%，10 点(0.5m) 后剩 35%，20 点(1m) 后剩 12%
-        self.density_decay = 0.90
+        # 判定"这里是弯道"的曲率阈值：κ > 此值即弯曲，密度会传过去。
+        # 0.2 对应 R < 5 m；直道 κ≈0，不会被穿透。
+        self.straight_kappa = 0.2
         self.use_stage_decay = True          # 待探测
         self._stage_decay_probed = False
         self._W_base = np.array(ocp.cost.W, dtype=float, copy=True)
@@ -189,18 +189,20 @@ class AcadosMPCBase(ABC):
         # ① 原始密度：曲率越大密度越高
         density = 1.0 + self.curv_gain * kappa      # 长度 n-1
 
-        # ② 把高密度「扩散」出去，形成连续的约束带。
-        #   只留一小段尖峰没用：优化器满足了拐角那几个点之后，紧邻的
-        #   直道点密度立刻回到 1，中间仍有大量自由度，于是它走一条大弧线
-        #   从旁边绕过去（表现就是"更容易冲出弯道"）。
-        #   这里沿两个方向做指数衰减的 max 传播，让拐角的高权重一路
-        #   向后（和向前）铺开，直到衰减回 1（直道）为止 —— 形成一个
-        #   有宽度的"约束带"，曲线被压在路径附近。
+        # ② 把高密度「扩散」出去，形成约束带 —— **一直传到直道为止**。
+        #   不是按固定距离衰减：那样扩散范围由 decay 决定，拐角外 1 m
+        #   就回到 1 了，中间那段仍然是松的。
+        #   这里用曲率当"墙"：只要邻居还是弯道（κ > straight_kappa），
+        #   就把它的密度传过来（取最大值，不衰减）；碰到直道就停。
+        #   于是整段弯道都拿到同一个高密度，直道保持 1。
+        is_curve = kappa > self.straight_kappa            # 长度 n-1
         d = density.copy()
-        for k in range(1, len(d)):                       # 后向
-            d[k] = max(d[k], d[k - 1] * self.density_decay)
-        for k in range(len(d) - 2, -1, -1):              # 前向
-            d[k] = max(d[k], d[k + 1] * self.density_decay)
+        for k in range(1, len(d)):                        # 后向
+            if is_curve[k - 1]:
+                d[k] = max(d[k], d[k - 1])
+        for k in range(len(d) - 2, -1, -1):               # 前向
+            if is_curve[k + 1]:
+                d[k] = max(d[k], d[k + 1])
         density = d
 
         cum = np.concatenate(([0.0], np.cumsum(density * ds)))   # 长度 n
