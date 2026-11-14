@@ -321,14 +321,23 @@ class Navigation:
             np.asarray(self._path_vmax, dtype=float),
         )
 
-        # 清掉上一次任务残留的 warm start（x/u/pi/lam），
-        # 否则新 yref 突变后的前几帧 QP 线性化点还是旧轨迹
+        # 重置 warm start（x/u/pi/lam）后**必须**重新填 x/u 猜测，
+        # 否则求解器从全零出发、首帧解出接近零的控制量 —— 表现为
+        # 「设了目标点车不动」。这里 reset 之后按当前状态铺一条初始猜测。
         try:
             if hasattr(self.mpc.solver, 'reset'):
                 self.mpc.solver.reset()
-                print('[MPC] 已重置求解器 warm start（新目标）', flush=True)
-        except Exception:                      # noqa: BLE001
-            pass
+                x0_aug = np.concatenate([
+                    np.array([float(start[0]), float(start[1]), float(start[2])]),
+                    np.asarray(self.mpc.last_aug_state, dtype=float),
+                ])
+                for k in range(self.mpc.n_horizon + 1):
+                    self.mpc.solver.set(k, "x", x0_aug)
+                for k in range(self.mpc.n_horizon):
+                    self.mpc.solver.set(k, "u", np.zeros(3))
+                print('[MPC] 已重置 warm start 并按当前状态铺初值', flush=True)
+        except Exception as exc:               # noqa: BLE001
+            print(f'[MPC] warm start 重置跳过（{exc}）', flush=True)
         self._phase = TRACK
         self._blocked = False
         self.last_error = ''
