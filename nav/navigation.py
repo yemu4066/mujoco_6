@@ -580,8 +580,29 @@ class Navigation:
         return float((x - ref[0]) * nx + (y - ref[1]) * ny)
 
     def _apply_speed_limit(self) -> None:
-        """参考推进速度：恒定，不随路径曲率/包络变化。"""
-        self.mpc.ref_speed = float(self.ref_speed)
+        """按当前位置从速度剖面里取参考推进速度。
+
+        速度剖面 _path_vmax 由 _build_speed_profile 生成：
+            曲率限速  v <= min(sqrt(a_lat·R), dα·R)
+            反向制动包络（brake_decel）保证相邻点速度差物理可达
+        每帧按 s_start 查表，所以进弯前会自动、平滑地降速。
+
+        原来这里恒定返回 ref_speed（4.0），等于把整条剖面作废 ——
+        MPC 的参考点永远以 4 m/s 前进，弯道也一样，于是 4 m/s 过
+        R=0.35 的弯（需要 dα=11.4 rad/s，而约束只有 4.0）必然冲出去。
+        """
+        vmax = self._path_vmax
+        pl = self.mpc.path_planner
+        s_path = np.asarray(getattr(pl, 's_samples', []), dtype=float)
+        if vmax is None or len(vmax) < 2 or len(s_path) < 2 or self._last_pose is None:
+            self.mpc.ref_speed = float(self.ref_speed)
+            return
+
+        s_now = pl.get_nearest_s(self._last_pose[0], self._last_pose[1])
+        # vmax 是按 points 索引的，和 s_samples 粒度可能不同，统一插值
+        v_ref_profile = np.linspace(0.0, float(s_path[-1]), len(vmax))
+        v = float(np.interp(s_now, v_ref_profile, vmax))
+        self.mpc.ref_speed = max(v, self.speed_min)
 
     # ================================================================
     # 动态障碍
