@@ -85,6 +85,9 @@ class AcadosMPCBase(ABC):
         # 弯道之外「缓降」的每步保留比例（点间距约 5cm）：
         #   0.97 → 0.5m 后 0.74，1.0m 后 0.55，2.0m 后 0.30，3.0m 后 0.16
         self.density_decay = 0.97
+        self.use_stage_weights = True
+        self._stage_weights_ok = False
+        self._cur_stage_w = None
         self.use_stage_decay = True          # 待探测
         self._stage_decay_probed = False
         self._W_base = np.array(ocp.cost.W, dtype=float, copy=True)
@@ -166,6 +169,60 @@ class AcadosMPCBase(ABC):
             self.use_stage_decay = False
             print(f'[MPC] 当前 acados 不支持逐 stage 设置 W，退回均匀权重（{exc}）')
 
+    def _curvature_density(self) -> np.ndarray:
+        """沿路径的「重要度密度」：曲率大处高，整段弯道一致，出弯后缓降。"""
+        pl = self.path_planner
+        s_path = np.asarray(pl.s_samples, dtype=float)
+        yaw_u = np.asarray(pl.yaw_path_unwrapped, dtype=float)
+        if len(s_path) < 3:
+            return np.ones(max(len(s_path), 2), dtype=float)
+
+        ds = np.maximum(np.diff(s_path), 1e-6)
+        kappa = np.minimum(np.abs(np.diff(yaw_u)) / ds, self.kappa_cap)
+        density = 1.0 + self.curv_gain * kappa
+
+        is_curve = kappa > self.straight_kappa
+        d = density.copy()
+        for k in range(1, len(d)):                    # 弯道内保持一致
+            if is_curve[k - 1]:
+                d[k] = max(d[k], d[k - 1])
+        for k in range(len(d) - 2, -1, -1):
+            if is_curve[k + 1]:
+                d[k] = max(d[k], d[k + 1])
+        for k in range(1, len(d)):                    # 只在弯道之后缓降
+            d[k] = max(d[k], d[k - 1] * self.density_decay)
+        return np.concatenate([d, d[-1:]])
+
+    def _stage_weights(self, s_start: float) -> np.ndarray:
+        """每个 stage 的权重倍率（长度 n_horizon+1）。
+
+        参考点在弧长上**保持均匀**（时间语义不变），权重单独由曲率密度
+        决定，逐 stage 乘到 W 上 —— 这样"更重要"不会顺带改掉"该多快"。
+        """
+        pl = self.path_planner
+        s_path = np.asarray(pl.s_samples, dtype=float)
+        dens = self._curvature_density()
+        if len(s_path) < 2 or len(dens) != len(s_path):
+            return np.ones(self.n_horizon + 1, dtype=float)
+        s_q = s_start + self.ref_speed * self.dt * np.arange(self.n_horizon + 1)
+        s_q = np.clip(s_q, 0.0, float(s_path[-1]))
+        return np.interp(s_q, s_path, dens)
+
+    def _apply_stage_weights(self, w: np.ndarray) -> None:
+        """把每 stage 的曲率权重乘进 W；acados 不支持就退回均匀权重。"""
+        if not self.use_stage_weights:
+            return
+        try:
+            for k in range(self.n_horizon):
+                self.solver.set(k, "W", self._W_base * float(w[k]))
+            if not self._stage_weights_ok:
+                self._stage_weights_ok = True
+                print(f'[MPC] 逐 stage 曲率权重已启用：'
+                      f'min={float(np.min(w)):.2f} max={float(np.max(w)):.2f}')
+        except Exception as exc:                       # noqa: BLE001
+            self.use_stage_weights = False
+            print(f'[MPC] 当前 acados 不支持逐 stage 设置 W，退回均匀权重（{exc}）')
+
     def _curvature_weighted_queries(self, s_start: float) -> np.ndarray:
         """参考点等弧长排布：第 k 个点 = 「k×dt 秒后应到之处」。
 
@@ -197,6 +254,7 @@ class AcadosMPCBase(ABC):
 
             # 存一份参考点，给 foxglove 可视化（nav_node 会发布成 MarkerArray）
             self.last_ref_points = ref_states_all.copy()
+            self._cur_stage_w = self._stage_weights(s_start)
             # 当前是 A 方案（曲率密度内联在 _curvature_weighted_queries 里），
             # 没有单独的 _stage_weights()。这里留空，Marker 用统一外观。
             self.last_ref_weights = None
@@ -230,6 +288,9 @@ class AcadosMPCBase(ABC):
                 # 一旦失败就永久放弃，绝不能每帧抛异常把控制卡死
                 self._vcap_failed = True
                 print(f'[MPC] v 上限跟随 ref_speed 设置失败，退回固定约束（{exc}）')
+
+        if self._cur_stage_w is not None:
+            self._apply_stage_weights(self._cur_stage_w)
 
         self.solver.set(0, "lbx", x_current)
         self.solver.set(0, "ubx", x_current)
