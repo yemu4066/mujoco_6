@@ -72,7 +72,8 @@ class AcadosMPCBase(ABC):
         # 规划层可用的 |dv| 上限，用来把 v_cap 逐 step 放开
         self.dv_max_spec = 3.0
         # 曲率加权采样的参数
-        self.view_range = 4.0      # 参考点覆盖的空间长度 [m]，与 ref_speed 解耦
+        # 参考点覆盖的空间长度：跟原来的 ref_speed×dt×n_horizon 一致（4.0×0.01×175=7.0m）
+        self.view_range = None     # None = 动态按 ref_speed 算
         self.curv_gain = 1.0       # 曲率对密度的加权强度
         self.kappa_cap = 5.0       # 曲率上限，避免极窄拐角把密度拉爆
         # 判定"这里是弯道"的曲率阈值：κ > 此值即弯曲，密度会传过去。
@@ -159,6 +160,13 @@ class AcadosMPCBase(ABC):
             self.use_stage_decay = False
             print(f'[MPC] 当前 acados 不支持逐 stage 设置 W，退回均匀权重（{exc}）')
 
+    def _view_range(self) -> float:
+        """参考点覆盖的空间长度。动态跟随 ref_speed，保持原来的 7 m 视野。"""
+        v = self.view_range
+        if v is None or v <= 0:
+            v = float(self.ref_speed) * float(self.dt) * self.n_horizon
+        return max(float(v), 1e-3)
+
     def _curvature_weighted_queries(self, s_start: float) -> np.ndarray:
         """按局部曲率分配参考点：拐角多放点，直道少放点。
 
@@ -178,7 +186,7 @@ class AcadosMPCBase(ABC):
         yaw_u = np.asarray(pl.yaw_path_unwrapped, dtype=float)
         if len(s_path) < 3:
             # 路径太短，退回等弧长
-            step = self.view_range / self.n_horizon
+            step = self._view_range() / self.n_horizon
             return s_start + step * np.arange(self.n_horizon + 1)
 
         ds = np.maximum(np.diff(s_path), 1e-6)       # 长度 n-1
@@ -207,7 +215,7 @@ class AcadosMPCBase(ABC):
 
         cum = np.concatenate(([0.0], np.cumsum(density * ds)))   # 长度 n
         if cum[-1] < 1e-9:
-            step = self.view_range / self.n_horizon
+            step = self._view_range() / self.n_horizon
             return s_start + step * np.arange(self.n_horizon + 1)
         cum /= cum[-1]                               # 归一化到 [0, 1]
 
@@ -215,9 +223,9 @@ class AcadosMPCBase(ABC):
         # 如果先按弧长等分再转权重再转回来，那是恒等变换，等于没加密。
         s_lo = max(0.0, float(s_start))
         s_hi = float(s_path[-1])
-        s_end = min(s_lo + self.view_range, s_hi)
+        s_end = min(s_lo + self._view_range(), s_hi)
         if s_end - s_lo < 1e-6:
-            step = self.view_range / self.n_horizon
+            step = self._view_range() / self.n_horizon
             return s_start + step * np.arange(self.n_horizon + 1)
 
         w_lo = float(np.interp(s_lo, s_path, cum))
