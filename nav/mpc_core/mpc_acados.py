@@ -75,6 +75,9 @@ class AcadosMPCBase(ABC):
         self.view_range = 4.0      # 参考点覆盖的空间长度 [m]，与 ref_speed 解耦
         self.curv_gain = 1.0       # 曲率对密度的加权强度
         self.kappa_cap = 5.0       # 曲率上限，避免极窄拐角把密度拉爆
+        # 密度沿路径扩散的衰减率：每 5cm 点保留上一点的这个比例。
+        # 0.90 → 5 点后剩 59%，10 点(0.5m) 后剩 35%，20 点(1m) 后剩 12%
+        self.density_decay = 0.90
         self.use_stage_decay = True          # 待探测
         self._stage_decay_probed = False
         self._W_base = np.array(ocp.cost.W, dtype=float, copy=True)
@@ -183,7 +186,23 @@ class AcadosMPCBase(ABC):
         # 限幅，避免极窄拐角把密度拉爆（拐角处 kappa 可以到 10+）
         kappa = np.minimum(kappa, self.kappa_cap)
 
-        density = 1.0 + self.curv_gain * kappa      # 长度 n-1，曲率大 → 密度大
+        # ① 原始密度：曲率越大密度越高
+        density = 1.0 + self.curv_gain * kappa      # 长度 n-1
+
+        # ② 把高密度「扩散」出去，形成连续的约束带。
+        #   只留一小段尖峰没用：优化器满足了拐角那几个点之后，紧邻的
+        #   直道点密度立刻回到 1，中间仍有大量自由度，于是它走一条大弧线
+        #   从旁边绕过去（表现就是"更容易冲出弯道"）。
+        #   这里沿两个方向做指数衰减的 max 传播，让拐角的高权重一路
+        #   向后（和向前）铺开，直到衰减回 1（直道）为止 —— 形成一个
+        #   有宽度的"约束带"，曲线被压在路径附近。
+        d = density.copy()
+        for k in range(1, len(d)):                       # 后向
+            d[k] = max(d[k], d[k - 1] * self.density_decay)
+        for k in range(len(d) - 2, -1, -1):              # 前向
+            d[k] = max(d[k], d[k + 1] * self.density_decay)
+        density = d
+
         cum = np.concatenate(([0.0], np.cumsum(density * ds)))   # 长度 n
         if cum[-1] < 1e-9:
             step = self.view_range / self.n_horizon
