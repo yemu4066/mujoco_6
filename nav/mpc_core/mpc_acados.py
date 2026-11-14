@@ -73,7 +73,7 @@ class AcadosMPCBase(ABC):
         self.dv_max_spec = 3.0
         # 曲率加权采样的参数
         # 参考点覆盖的空间长度：跟原来的 ref_speed×dt×n_horizon 一致（4.0×0.01×175=7.0m）
-        self.view_range = None     # None = 动态按 ref_speed 算
+        self.view_range = 5.0      # 参考点视野 [m]；None = 动态按 ref_speed 算（7.0m）
         self.curv_gain = 1.0       # 曲率对密度的加权强度
         self.kappa_cap = 5.0       # 曲率上限，避免极窄拐角把密度拉爆
         # 判定"这里是弯道"的曲率阈值：κ > 此值即弯曲，密度会传过去。
