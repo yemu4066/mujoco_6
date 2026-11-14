@@ -215,14 +215,12 @@ class AcadosMPCBase(ABC):
             if is_curve[k + 1]:
                 d[k] = max(d[k], d[k + 1])
 
-        # ③ 弯道之外再铺一段「缓降」：高密度按 density_decay 指数衰减着
-        #   蔓延到之后的直道上，而不是一到直道就掉回 1。
-        #   这样弯道出口/斜坡之后的那段直道仍保有略高的权重，轨迹不会在
-        #   刚出弯时立刻松掉；衰减到 1 就自然停止（density 最小是 1）。
-        for k in range(1, len(d)):                        # 后向缓降
+        # ③ 只在**弯道之后**往直道铺缓降（不往前铺）。
+        #   高密度按 density_decay 指数衰减地蔓延到出弯后的直道上，
+        #   衰减到 1 自然停止（density 最小是 1）。
+        #   弯道之前不做辐射：一进弯前的直道密度就是 1。
+        for k in range(1, len(d)):                        # 只保留后向
             d[k] = max(d[k], d[k - 1] * self.density_decay)
-        for k in range(len(d) - 2, -1, -1):               # 前向缓降
-            d[k] = max(d[k], d[k + 1] * self.density_decay)
         density = d
 
         cum = np.concatenate(([0.0], np.cumsum(density * ds)))   # 长度 n
