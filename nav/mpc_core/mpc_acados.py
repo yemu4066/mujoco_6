@@ -122,7 +122,7 @@ class AcadosMPCBase(ABC):
                     self.solver.set(1, "lbx", lb)
                     self.solver.set(1, "ubx", ub)
                     self._vcap_dim = dim
-                    print(f'[MPC] v 上限跟随 ref_speed 已启用（维度 {dim}）')
+                    print(f'[MPC] v 上限跟随 ref_speed 已启用（维度 {dim}）', flush=True)
                     break
                 except Exception:                        # noqa: BLE001
                     continue
@@ -200,10 +200,10 @@ class AcadosMPCBase(ABC):
             if not self._stage_weights_ok:
                 self._stage_weights_ok = True
                 print(f'[MPC] 逐 stage 曲率权重已启用：'
-                      f'min={float(np.min(w)):.2f} max={float(np.max(w)):.2f}')
+                      f'min={float(np.min(w)):.2f} max={float(np.max(w)):.2f}', flush=True)
         except Exception as exc:                       # noqa: BLE001
             self.use_stage_weights = False
-            print(f'[MPC] 当前 acados 不支持逐 stage 设置 W，退回均匀权重（{exc}）')
+            print(f'[MPC] 当前 acados 不支持逐 stage 设置 W，退回均匀权重（{exc}）', flush=True)
 
     def _curvature_weighted_queries(self, s_start: float) -> np.ndarray:
         """参考点等弧长排布：第 k 个点 = 「k×dt 秒后应到之处」。
@@ -267,7 +267,7 @@ class AcadosMPCBase(ABC):
             except Exception as exc:                     # noqa: BLE001
                 # 一旦失败就永久放弃，绝不能每帧抛异常把控制卡死
                 self._vcap_failed = True
-                print(f'[MPC] v 上限跟随 ref_speed 设置失败，退回固定约束（{exc}）')
+                print(f'[MPC] v 上限跟随 ref_speed 设置失败，退回固定约束（{exc}）', flush=True)
 
         if self._cur_stage_w is not None:
             self._apply_stage_weights(self._cur_stage_w)
