@@ -627,10 +627,19 @@ class Navigation:
             return
 
         s_now = pl.get_nearest_s(self._last_pose[0], self._last_pose[1])
+        # 诊断：每 50 帧打一次，看限速到底给了多少
+        self._dbg_n = getattr(self, '_dbg_n', 0) + 1
+        if self._dbg_n % 50 == 0:
+            print(f'[SPD] s_now={s_now:.2f}/{s_path[-1]:.2f} '
+                  f'vmax=[{vmax.min():.2f},{vmax.max():.2f}] '
+                  f'len(vmax)={len(vmax)} len(s)={len(s_path)}', flush=True)
         # vmax 是按 points 索引的，和 s_samples 粒度可能不同，统一插值
         v_ref_profile = np.linspace(0.0, float(s_path[-1]), len(vmax))
         v = float(np.interp(s_now, v_ref_profile, vmax))
         self.mpc.ref_speed = max(v, self.speed_min)
+        if self._dbg_n % 50 == 0:
+            print(f'[SPD] v_ref={self.mpc.ref_speed:.3f} '
+                  f'(interp={v:.3f})', flush=True)
 
     # ================================================================
     # 动态障碍
