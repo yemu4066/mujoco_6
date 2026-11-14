@@ -71,6 +71,10 @@ class AcadosMPCBase(ABC):
         self._vcap_dim = None
         # 规划层可用的 |dv| 上限，用来把 v_cap 逐 step 放开
         self.dv_max_spec = 3.0
+        # 曲率加权采样的参数
+        self.view_range = 4.0      # 参考点覆盖的空间长度 [m]，与 ref_speed 解耦
+        self.curv_gain = 1.0       # 曲率对密度的加权强度
+        self.kappa_cap = 5.0       # 曲率上限，避免极窄拐角把密度拉爆
         self.use_stage_decay = True          # 待探测
         self._stage_decay_probed = False
         self._W_base = np.array(ocp.cost.W, dtype=float, copy=True)
@@ -152,6 +156,55 @@ class AcadosMPCBase(ABC):
             self.use_stage_decay = False
             print(f'[MPC] 当前 acados 不支持逐 stage 设置 W，退回均匀权重（{exc}）')
 
+    def _curvature_weighted_queries(self, s_start: float) -> np.ndarray:
+        """按局部曲率分配参考点：拐角多放点，直道少放点。
+
+        MPC 手上只有一条参考点序列，看不到墙。它对"哪里需要转弯"的唯一
+        信息来源就是路径本身的几何 —— 也就是相邻参考点的切线角变化
+        （Δθ = ds/R，正比于曲率 κ）。
+
+        均匀等弧长排列时，直角拐角只占 176 个点里的 13 个（7.4%），
+        优化器为了迎合剩下的 163 个直道点，会选一条平滑过渡的曲线，
+        也就是"切角"。这里把点按曲率重新分布：拐角密度高 → 点数多 →
+        在 Σ||x_k − p_k||² 里占比大 → 优化器必须贴住拐角。
+
+        总视野仍然保持 view_range 不变，只是把点数从直道挪到弯道。
+        """
+        pl = self.path_planner
+        s_path = np.asarray(pl.s_samples, dtype=float)
+        yaw_u = np.asarray(pl.yaw_path_unwrapped, dtype=float)
+        if len(s_path) < 3:
+            # 路径太短，退回等弧长
+            step = self.view_range / self.n_horizon
+            return s_start + step * np.arange(self.n_horizon + 1)
+
+        ds = np.maximum(np.diff(s_path), 1e-6)       # 长度 n-1
+        kappa = np.abs(np.diff(yaw_u)) / ds          # 离散曲率，长度 n-1
+        # 限幅，避免极窄拐角把密度拉爆（拐角处 kappa 可以到 10+）
+        kappa = np.minimum(kappa, self.kappa_cap)
+
+        density = 1.0 + self.curv_gain * kappa      # 长度 n-1，曲率大 → 密度大
+        cum = np.concatenate(([0.0], np.cumsum(density * ds)))   # 长度 n
+        if cum[-1] < 1e-9:
+            step = self.view_range / self.n_horizon
+            return s_start + step * np.arange(self.n_horizon + 1)
+        cum /= cum[-1]                               # 归一化到 [0, 1]
+
+        # 关键：在**权重累积坐标**上等间隔取样，再反查弧长。
+        # 如果先按弧长等分再转权重再转回来，那是恒等变换，等于没加密。
+        s_lo = max(0.0, float(s_start))
+        s_hi = float(s_path[-1])
+        s_end = min(s_lo + self.view_range, s_hi)
+        if s_end - s_lo < 1e-6:
+            step = self.view_range / self.n_horizon
+            return s_start + step * np.arange(self.n_horizon + 1)
+
+        w_lo = float(np.interp(s_lo, s_path, cum))
+        w_hi = float(np.interp(s_end, s_path, cum))
+        wq = np.linspace(w_lo, w_hi, self.n_horizon + 1)   # 权重空间等间隔
+        s_q = np.interp(wq, cum, s_path)                   # 反查弧长
+        return np.clip(s_q, s_lo, s_hi)
+
     def set_path(self, points: np.ndarray, target_yaw: float, ref_speed: float = 1.0):
         """设置跟踪路径"""
         self.path_planner.generate_path(points[:, 0], points[:, 1])
@@ -164,7 +217,7 @@ class AcadosMPCBase(ABC):
         # 1. 准备参考轨迹 (使用 p 参数)
         if self.following:
             s_start = self.path_planner.get_nearest_s(x_current[0], x_current[1])
-            s_queries = s_start + self.ref_speed * self.dt * np.arange(self.n_horizon + 1)
+            s_queries = self._curvature_weighted_queries(s_start)
             ref_states_all = self.path_planner.get_states_batch(s_queries)
             
             # 由参考朝向推出路径法向量：切线 (cosθ, sinθ) → 法线 (-sinθ, cosθ)
