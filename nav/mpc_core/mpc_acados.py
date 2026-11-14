@@ -366,4 +366,21 @@ class AugmentedSwerveMPC(AcadosMPCBase):
         # 提取预测的下一步状态作为当前的底盘指令
         v_next, alpha_next, vw_next = x_1[3:6]
         self.last_aug_state = np.array([v_next, alpha_next, vw_next])
-        return np.array([v_next * cos(alpha_next), v_next * sin(alpha_next), vw_next])
+
+        # ★ 规范化到 |alpha| <= 90°。
+        #   运动学上 (v, α) 与 (−v, α∓180°) 完全等价（速度矢量相同），
+        #   但 swerve_solver 在低速平移分支（<0.3 m/s）会用
+        #       err_a = |desired − last|
+        #       err_b = |desired + 180° − last|
+        #   选误差小的那个来决定要不要把轮子翻 180° 反向驱动。
+        #   只要 |α| > 90° 它就会翻，而翻过之后 last_target_angles 变成
+        #   负角、下次判据又倾向翻 —— 状态会"粘住"，表现为车头方向
+        #   和路径差得多的目标点出发时路线明显偏差。
+        #   这里先翻好再发出去，轮子就永远不会被 flip。
+        if abs(alpha_next) > math.pi / 2.0:
+            v_out = -v_next
+            a_out = alpha_next - math.copysign(math.pi, alpha_next)
+            a_out = math.atan2(math.sin(a_out), math.cos(a_out))
+        else:
+            v_out, a_out = v_next, alpha_next
+        return np.array([v_out * math.cos(a_out), v_out * math.sin(a_out), vw_next])
