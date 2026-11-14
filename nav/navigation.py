@@ -49,7 +49,7 @@ class Navigation:
                  cost_weight: float = 2.0,
                  ref_speed: float = 4.0,
                  mpc_dt: float = 0.01,
-                 mpc_horizon: int = 175,
+                 mpc_horizon: int = 100,
                  v_max: float = 5.0,
                  goal_tolerance: float = 0.05,
                  rotate_tolerance: float = 0.05,
