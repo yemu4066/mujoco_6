@@ -166,94 +166,14 @@ class AcadosMPCBase(ABC):
             self.use_stage_decay = False
             print(f'[MPC] 当前 acados 不支持逐 stage 设置 W，退回均匀权重（{exc}）')
 
-    def _view_range(self) -> float:
-        """参考点覆盖的空间长度。动态跟随 ref_speed，保持原来的 7 m 视野。"""
-        v = self.view_range
-        if v is None or v <= 0:
-            v = float(self.ref_speed) * float(self.dt) * self.n_horizon
-        return max(float(v), 1e-3)
-
     def _curvature_weighted_queries(self, s_start: float) -> np.ndarray:
-        """按局部曲率分配参考点：拐角多放点，直道少放点。
+        """参考点等弧长排布：第 k 个点 = 「k×dt 秒后应到之处」。
 
-        MPC 手上只有一条参考点序列，看不到墙。它对"哪里需要转弯"的唯一
-        信息来源就是路径本身的几何 —— 也就是相邻参考点的切线角变化
-        （Δθ = ds/R，正比于曲率 κ）。
-
-        均匀等弧长排列时，直角拐角只占 176 个点里的 13 个（7.4%），
-        优化器为了迎合剩下的 163 个直道点，会选一条平滑过渡的曲线，
-        也就是"切角"。这里把点按曲率重新分布：拐角密度高 → 点数多 →
-        在 Σ||x_k − p_k||² 里占比大 → 优化器必须贴住拐角。
-
-        总视野仍然保持 view_range 不变，只是把点数从直道挪到弯道。
+        曲率加权（按密度重采样）已停用：那样会打乱时间语义（拐角处
+        点间距被压到 0.8 cm，等于隐含把局部速度目标降低好几倍），
+        在 L1 入口的直角处表现反而更差。恢复原来的等弧长采样。
         """
-        pl = self.path_planner
-        s_path = np.asarray(pl.s_samples, dtype=float)
-        yaw_u = np.asarray(pl.yaw_path_unwrapped, dtype=float)
-        if len(s_path) < 3:
-            # 路径太短，退回等弧长
-            step = self._view_range() / self.n_horizon
-            return s_start + step * np.arange(self.n_horizon + 1)
-
-        ds = np.maximum(np.diff(s_path), 1e-6)       # 长度 n-1
-        kappa = np.abs(np.diff(yaw_u)) / ds          # 离散曲率，长度 n-1
-        # 限幅，避免极窄拐角把密度拉爆（拐角处 kappa 可以到 10+）
-        kappa = np.minimum(kappa, self.kappa_cap)
-
-        # ① 原始密度：曲率越大密度越高
-        density = 1.0 + self.curv_gain * kappa      # 长度 n-1
-
-        # ② 把高密度「扩散」出去，形成约束带 —— **一直传到直道为止**。
-        #   不是按固定距离衰减：那样扩散范围由 decay 决定，拐角外 1 m
-        #   就回到 1 了，中间那段仍然是松的。
-        #   这里用曲率当"墙"：只要邻居还是弯道（κ > straight_kappa），
-        #   就把它的密度传过来（取最大值，不衰减）；碰到直道就停。
-        #   于是整段弯道都拿到同一个高密度，直道保持 1。
-        is_curve = kappa > self.straight_kappa            # 长度 n-1
-        d = density.copy()
-        for k in range(1, len(d)):                        # 后向
-            if is_curve[k - 1]:
-                d[k] = max(d[k], d[k - 1])
-        for k in range(len(d) - 2, -1, -1):               # 前向
-            if is_curve[k + 1]:
-                d[k] = max(d[k], d[k + 1])
-
-        # ③ 只在**弯道之后**往直道铺缓降（不往前铺）。
-        #   高密度按 density_decay 指数衰减地蔓延到出弯后的直道上，
-        #   衰减到 1 自然停止（density 最小是 1）。
-        #   弯道之前不做辐射：一进弯前的直道密度就是 1。
-        for k in range(1, len(d)):                        # 只保留后向
-            d[k] = max(d[k], d[k - 1] * self.density_decay)
-        density = d
-
-        cum = np.concatenate(([0.0], np.cumsum(density * ds)))   # 长度 n
-        if cum[-1] < 1e-9:
-            step = self._view_range() / self.n_horizon
-            return s_start + step * np.arange(self.n_horizon + 1)
-        cum /= cum[-1]                               # 归一化到 [0, 1]
-
-        # 关键：在**权重累积坐标**上等间隔取样，再反查弧长。
-        # 如果先按弧长等分再转权重再转回来，那是恒等变换，等于没加密。
-        s_lo = max(0.0, float(s_start))
-        s_hi = float(s_path[-1])
-
-        # 视野与「剩余路径长度」取小：快到终点时视野自动收短，
-        # 176 个参考点全部铺在剩余路径上，不会越过终点后被 clip 成一堆
-        # 重复的同一个点（那样 MPC 就失去「往前还有多远」的方向信息，
-        # 越接近终点越保守、速度掉得越快）。
-        remaining = max(0.0, s_hi - s_lo)
-        effective_view = min(self._view_range(), remaining)
-        s_end = min(s_lo + effective_view, s_hi)
-        if s_end - s_lo < 1e-6:
-            step = self._view_range() / self.n_horizon
-            return s_start + step * np.arange(self.n_horizon + 1)
-        self._last_effective_view = float(effective_view)
-
-        w_lo = float(np.interp(s_lo, s_path, cum))
-        w_hi = float(np.interp(s_end, s_path, cum))
-        wq = np.linspace(w_lo, w_hi, self.n_horizon + 1)   # 权重空间等间隔
-        s_q = np.interp(wq, cum, s_path)                   # 反查弧长
-        return np.clip(s_q, s_lo, s_hi)
+        return s_start + self.ref_speed * self.dt * np.arange(self.n_horizon + 1)
 
     def set_path(self, points: np.ndarray, target_yaw: float, ref_speed: float = 1.0):
         """设置跟踪路径"""
