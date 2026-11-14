@@ -79,6 +79,7 @@ class AcadosMPCBase(ABC):
         # 判定"这里是弯道"的曲率阈值：κ > 此值即弯曲，密度会传过去。
         # 0.2 对应 R < 5 m；直道 κ≈0，不会被穿透。
         self.straight_kappa = 0.2
+        self._last_effective_view = 0.0
         # 弯道之外「缓降」的每步保留比例（点间距约 5cm）：
         #   0.97 → 0.5m 后 0.74，1.0m 后 0.55，2.0m 后 0.30，3.0m 后 0.16
         self.density_decay = 0.97
@@ -233,10 +234,18 @@ class AcadosMPCBase(ABC):
         # 如果先按弧长等分再转权重再转回来，那是恒等变换，等于没加密。
         s_lo = max(0.0, float(s_start))
         s_hi = float(s_path[-1])
-        s_end = min(s_lo + self._view_range(), s_hi)
+
+        # 视野与「剩余路径长度」取小：快到终点时视野自动收短，
+        # 176 个参考点全部铺在剩余路径上，不会越过终点后被 clip 成一堆
+        # 重复的同一个点（那样 MPC 就失去「往前还有多远」的方向信息，
+        # 越接近终点越保守、速度掉得越快）。
+        remaining = max(0.0, s_hi - s_lo)
+        effective_view = min(self._view_range(), remaining)
+        s_end = min(s_lo + effective_view, s_hi)
         if s_end - s_lo < 1e-6:
             step = self._view_range() / self.n_horizon
             return s_start + step * np.arange(self.n_horizon + 1)
+        self._last_effective_view = float(effective_view)
 
         w_lo = float(np.interp(s_lo, s_path, cum))
         w_hi = float(np.interp(s_end, s_path, cum))
