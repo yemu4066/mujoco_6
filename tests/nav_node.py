@@ -26,7 +26,7 @@ import sys
 
 import numpy as np
 import rclpy
-from geometry_msgs.msg import PointStamped, PoseStamped, Twist
+from geometry_msgs.msg import Point, PointStamped, PoseStamped, Twist
 from std_msgs.msg import Empty, Float32MultiArray
 from visualization_msgs.msg import Marker, MarkerArray
 from nav_msgs.msg import Odometry, OccupancyGrid, Path
@@ -88,6 +88,9 @@ class NavNode(Node):
         self.speed_pub = self.create_publisher(Float32MultiArray, '/speed', 10)
         self.speed_label_pub = self.create_publisher(
             MarkerArray, '/speed_label', 10)
+        # MPC 可视化：参考点 + 预测轨迹
+        self.ref_pub = self.create_publisher(MarkerArray, '/mpc_ref', 10)
+        self.pred_pub = self.create_publisher(MarkerArray, '/mpc_pred', 10)
 
         self.create_subscription(PoseStamped, '/goal_pose', self._on_goal, 10)
         self.create_subscription(Odometry, '/odom', self._on_odom, 20)
@@ -112,6 +115,7 @@ class NavNode(Node):
         # 启动时发的那一条 TRANSIENT_LOCAL 历史消息，所以隔一秒再发一次。
         self.create_timer(1.0, lambda: self.map_pub.publish(self._map_msg))
         self.create_timer(0.5, self._publish_debug_obstacles)
+        self.create_timer(0.1, self._publish_mpc_viz)
         self.get_logger().info(
             f'/costmap {self._map_msg.info.width}x{self._map_msg.info.height}，'
             f'自由格 {int((self.nav.costmap.data == 0).sum())}')
@@ -242,6 +246,84 @@ class NavNode(Node):
         arr2 = MarkerArray()
         arr2.markers.append(m)
         self.speed_label_pub.publish(arr2)
+
+    def _publish_mpc_viz(self) -> None:
+        """把 MPC 这帧用的参考点和预测轨迹画出来。只读，不参与控制。"""
+        mpc = self.nav.mpc
+        now = self.get_clock().now().to_msg()
+
+        # ① 参考点：小球，越靠后越大（颜色由蓝到青，表示"时间上越远"）
+        ref = getattr(mpc, 'last_ref_points', None)
+        if ref is not None:
+            arr = MarkerArray()
+            n = len(ref)
+            for k in range(n):
+                x, y = float(ref[k, 0]), float(ref[k, 1])
+                m = Marker()
+                m.header.frame_id = 'map'
+                m.header.stamp = now
+                m.ns = 'mpc_ref'
+                m.id = k
+                m.type = Marker.SPHERE
+                m.action = Marker.ADD
+                m.pose.position.x = x
+                m.pose.position.y = y
+                m.pose.position.z = 0.05
+                m.pose.orientation.w = 1.0
+                # 起点小、终点略大，便于看出方向
+                frac = k / max(n - 1, 1)
+                m.scale.x = m.scale.y = m.scale.z = 0.02 + 0.02 * frac
+                m.color.r = 0.1
+                m.color.g = 0.6 + 0.4 * frac
+                m.color.b = 1.0 - 0.3 * frac
+                m.color.a = 0.85
+                arr.markers.append(m)
+            self.ref_pub.publish(arr)
+
+        # ② 预测轨迹：一条橙色折线，直接看 MPC 想怎么走
+        pred = getattr(mpc, 'last_pred_traj', None)
+        if pred is not None and len(pred) >= 2:
+            arr2 = MarkerArray()
+            m = Marker()
+            m.header.frame_id = 'map'
+            m.header.stamp = now
+            m.ns = 'mpc_pred'
+            m.id = 0
+            m.type = Marker.LINE_STRIP
+            m.action = Marker.ADD
+            m.pose.orientation.w = 1.0
+            m.scale.x = 0.02
+            m.color.r = 1.0
+            m.color.g = 0.55
+            m.color.b = 0.0
+            m.color.a = 0.95
+            for k in range(len(pred)):
+                pt = Point()
+                pt.x = float(pred[k, 0])
+                pt.y = float(pred[k, 1])
+                pt.z = 0.03
+                m.points.append(pt)
+            arr2.markers.append(m)
+
+            # 终点再放一个大球，标出预测尽头
+            me = Marker()
+            me.header.frame_id = 'map'
+            me.header.stamp = now
+            me.ns = 'mpc_pred'
+            me.id = 1
+            me.type = Marker.SPHERE
+            me.action = Marker.ADD
+            me.pose.position.x = float(pred[-1, 0])
+            me.pose.position.y = float(pred[-1, 1])
+            me.pose.position.z = 0.03
+            me.pose.orientation.w = 1.0
+            me.scale.x = me.scale.y = me.scale.z = 0.06
+            me.color.r = 1.0
+            me.color.g = 0.2
+            me.color.b = 0.0
+            me.color.a = 0.9
+            arr2.markers.append(me)
+            self.pred_pub.publish(arr2)
 
     def _publish_debug_obstacles(self) -> None:
         """把手动障碍画成 Marker，让人在 Foxglove 里看得见。"""

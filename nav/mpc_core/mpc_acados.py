@@ -73,6 +73,9 @@ class AcadosMPCBase(ABC):
         self.dv_max_spec = 3.0
         self.use_stage_decay = True          # 待探测
         self._stage_decay_probed = False
+        # 可视化用（只读，不参与控制）
+        self.last_ref_points = None      # (N+1, 3) 参考点 (x, y, θ)
+        self.last_pred_traj = None       # (M, 3)   MPC 预测轨迹 (x, y, θ)
         self._W_base = np.array(ocp.cost.W, dtype=float, copy=True)
         assert isinstance(ocp.model.x,SX)
         # 默认初始化参数 p
@@ -171,6 +174,7 @@ class AcadosMPCBase(ABC):
             cos_t = np.cos(ref_states_all[:, 2])
             sin_t = np.sin(ref_states_all[:, 2])
             ref_p = np.column_stack([ref_states_all[:, 0:3], -sin_t, cos_t])  # (n+1, 5)
+            self.last_ref_points = ref_states_all.copy()
 
             [self.solver.set(k, "p", ref_p[k]) for k in range(self.n_horizon)]
             self.solver.set(self.n_horizon, "p", ref_p[-1])
@@ -211,6 +215,16 @@ class AcadosMPCBase(ABC):
             print(f"Warning: {self.__class__.__name__} failed with status {status}")
 
         # 4. 获取结果并转化
+        # 取一条预测轨迹给 foxglove 画（每 4 步取一个点，176 步 → 45 点）
+        if self.following:
+            try:
+                step = 4
+                idx = list(range(0, self.n_horizon + 1, step))
+                self.last_pred_traj = np.array(
+                    [self.solver.get(k, "x")[:3] for k in idx])
+            except Exception:                            # noqa: BLE001
+                self.last_pred_traj = None
+
         return self._process_output(self.solver.get(0, "u"), self.solver.get(1, "x"))
 class OmniMPC(AcadosMPCBase):
     def __init__(self, dt=0.05, n_horizon=20):
