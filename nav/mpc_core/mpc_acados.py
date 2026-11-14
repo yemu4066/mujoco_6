@@ -84,8 +84,6 @@ class AcadosMPCBase(ABC):
         # 弯道之外「缓降」的每步保留比例（点间距约 5cm）：
         #   0.97 → 0.5m 后 0.74，1.0m 后 0.55，2.0m 后 0.30，3.0m 后 0.16
         self.density_decay = 0.97
-        self.use_stage_weights = True
-        self._stage_weights_ok = False
         self._cur_stage_w = None
         self._W_base = np.array(ocp.cost.W, dtype=float, copy=True)
         assert isinstance(ocp.model.x,SX)
@@ -192,21 +190,6 @@ class AcadosMPCBase(ABC):
         s_q = np.clip(s_q, 0.0, float(s_path[-1]))
         return np.interp(s_q, s_path, dens)
 
-    def _apply_stage_weights(self, w: np.ndarray) -> None:
-        """把每 stage 的曲率权重乘进 W；acados 不支持就退回均匀权重。"""
-        if not self.use_stage_weights:
-            return
-        try:
-            for k in range(self.n_horizon):
-                self.solver.set(k, "W", self._W_base * float(w[k]))
-            if not self._stage_weights_ok:
-                self._stage_weights_ok = True
-                print(f'[MPC] 逐 stage 曲率权重已启用：'
-                      f'min={float(np.min(w)):.2f} max={float(np.max(w)):.2f}', flush=True)
-        except Exception as exc:                       # noqa: BLE001
-            self.use_stage_weights = False
-            print(f'[MPC] 当前 acados 不支持逐 stage 设置 W，退回均匀权重（{exc}）', flush=True)
-
     def _curvature_weighted_queries(self, s_start: float) -> np.ndarray:
         """参考点等弧长排布：第 k 个点 = 「k×dt 秒后应到之处」。
 
@@ -234,20 +217,24 @@ class AcadosMPCBase(ABC):
             # 由参考朝向推出路径法向量：切线 (cosθ, sinθ) → 法线 (-sinθ, cosθ)
             cos_t = np.cos(ref_states_all[:, 2])
             sin_t = np.sin(ref_states_all[:, 2])
-            ref_p = np.column_stack([ref_states_all[:, 0:3], -sin_t, cos_t])  # (n+1, 5)
+            # 逐 stage 权重：曲率密度 → sqrt(w) 塞进 p[5]
+            # acados 不支持 solver.set(k, "W", ...)，所以权重改由 y 缩放实现
+            w = self._stage_weights(s_start)
+            self._cur_stage_w = w
+            self.last_ref_weights = w
+            sqrt_w = np.sqrt(np.clip(w, 0.05, 25.0))
+
+            ref_p = np.column_stack([ref_states_all[:, 0:3], -sin_t, cos_t,
+                                     sqrt_w])  # (n+1, 6)
 
             # 存一份参考点，给 foxglove 可视化（nav_node 会发布成 MarkerArray）
             self.last_ref_points = ref_states_all.copy()
-            self._cur_stage_w = self._stage_weights(s_start)
-            # 当前是 A 方案（曲率密度内联在 _curvature_weighted_queries 里），
-            # 没有单独的 _stage_weights()。这里留空，Marker 用统一外观。
-            self.last_ref_weights = None
 
             [self.solver.set(k, "p", ref_p[k]) for k in range(self.n_horizon)]
             self.solver.set(self.n_horizon, "p", ref_p[-1])
         else:
             tp = getattr(self, 'target_point', x_current[:3])
-            tp5 = np.array([tp[0], tp[1], tp[2], 0.0, 0.0])   # 定点停靠不需要横向约束
+            tp5 = np.array([tp[0], tp[1], tp[2], 0.0, 0.0, 1.0])   # p[5]=1，不缩放
             [self.solver.set(k, "p", tp5) for k in range(self.n_horizon + 1)]
 
         # 2. 设置当前状态约束
@@ -270,9 +257,6 @@ class AcadosMPCBase(ABC):
                 # 一旦失败就永久放弃，绝不能每帧抛异常把控制卡死
                 self._vcap_failed = True
                 print(f'[MPC] v 上限跟随 ref_speed 设置失败，退回固定约束（{exc}）', flush=True)
-
-        if self._cur_stage_w is not None:
-            self._apply_stage_weights(self._cur_stage_w)
 
         self.solver.set(0, "lbx", x_current)
         self.solver.set(0, "ubx", x_current)
@@ -360,16 +344,16 @@ class AugmentedSwerveMPC(AcadosMPCBase):
         # 代价维度：位置(2)+姿态(1)+横向(1)+状态(3)+控制(3) = 10
         # 终端：位置(2)+姿态(1)+横向(1)+状态(3) = 7
         self.ny_cost, self.ny_cost_e = 10, 7
-        super().__init__(dt, n_horizon, nx=6, nu=3, np_p=5)
+        super().__init__(dt, n_horizon, nx=6, nu=3, np_p=6)
 
     def _define_model(self):
         model = AcadosModel()
         model.name = "swerve_augmented_model"
         # x = [X, Y, theta, v, alpha, vw]
         # u = [dv, dalpha, dw]
-        # p = [x_ref, y_ref, theta_ref, nx, ny]
+        # p = [x_ref, y_ref, theta_ref, nx, ny, sqrt(weight)]
         #     前 3 个是参考位姿，后 2 个是**路径法向量**，用来算横向偏差
-        x, u, p = SX.sym('x', 6), SX.sym('u', 3), SX.sym('p', 5) #type: ignore
+        x, u, p = SX.sym('x', 6), SX.sym('u', 3), SX.sym('p', 6) #type: ignore
         theta, v, alpha, vw = x[2], x[3], x[4], x[5]
         dv, dalpha, dw = u[0], u[1], u[2]
         
@@ -416,10 +400,20 @@ class AugmentedSwerveMPC(AcadosMPCBase):
         heading_err = atan2(sin(ocp.model.x[2] + ocp.model.x[4] - ocp.model.p[2]),
                             cos(ocp.model.x[2] + ocp.model.x[4] - ocp.model.p[2]))
 
+        # ★ 逐 stage 权重：acados 的 NONLINEAR_LS 把 W 当编译期常量，
+        #   solver.set(k, "W", ...) 会报 'W' is not a valid argument。
+        #   但 y = f(x, u, p) 是可以自由缩放的：
+        #       把 sqrt(w) 乘进位置/横向项，等价于把 w 乘进 W
+        #       W·(sqrt(w)·e)² = W·w·e²
+        #   p[5] 由 Python 侧逐 stage 传入（ref_p[:, 5] = sqrt(w_k)）。
+        sw = ocp.model.p[5]
+        pos_err_w = pos_err * sw
+        lateral_err_w = lateral_err * sw
+
         # Cost: [位置(2), 运动方向(1), 横向(1), 状态(3), 控制率(3)] = 10
-        ocp.model.cost_y_expr = vertcat(pos_err, heading_err, lateral_err,
+        ocp.model.cost_y_expr = vertcat(pos_err_w, heading_err, lateral_err_w,
                                         ocp.model.x[3:6], ocp.model.u)
-        ocp.model.cost_y_expr_e = vertcat(pos_err, heading_err, lateral_err,
+        ocp.model.cost_y_expr_e = vertcat(pos_err_w, heading_err, lateral_err_w,
                                           ocp.model.x[3:6])
         
         ocp.cost.cost_type = ocp.cost.cost_type_e = 'NONLINEAR_LS'
