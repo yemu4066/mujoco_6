@@ -72,8 +72,7 @@ class AcadosMPCBase(ABC):
         self._vcap_dim = None
         # 规划层可用的 |dv| 上限，用来把 v_cap 逐 step 放开
         self.dv_max_spec = 3.0
-        # 曲率加权采样的参数
-        self.view_range = 4.0      # 参考点覆盖的空间长度 [m]，与 ref_speed 解耦
+        # 曲率加权参数
         self.curv_gain = 1.0       # 曲率对密度的加权强度
         self.kappa_cap = 5.0       # 曲率上限，避免极窄拐角把密度拉爆
         # 判定"这里是弯道"的曲率阈值：κ > 此值即弯曲，密度会传过去。
@@ -192,15 +191,16 @@ class AcadosMPCBase(ABC):
         if len(s_path) < 2 or len(dens) != len(s_path):
             return np.ones(self.n_horizon + 1, dtype=float)
         s_lo = max(0.0, float(s_start))
-        s_hi = min(s_lo + self.view_range, float(s_path[-1]))
-        s_q = np.linspace(s_lo, max(s_hi, s_lo + 1e-3), self.n_horizon + 1)
+        s_q = s_lo + self.ref_speed * self.dt * np.arange(self.n_horizon + 1)
+        s_q = np.minimum(s_q, float(s_path[-1]))
         return np.interp(s_q, s_path, dens)
 
     def _curvature_weighted_queries(self, s_start: float) -> np.ndarray:
-        """参考点在弧长上均匀排布（B 方案：权重交给逐 stage 的 W）。"""
-        s_lo = max(0.0, float(s_start))
-        step = self.view_range / self.n_horizon
-        return s_lo + step * np.arange(self.n_horizon + 1)
+        """参考点排布：保持原来的 ref_speed × dt 间距（视野不变）。
+
+        曲率加权只通过逐 stage 的 W 体现，不改变采样间距。
+        """
+        return s_start + self.ref_speed * self.dt * np.arange(self.n_horizon + 1)
 
     def set_path(self, points: np.ndarray, target_yaw: float, ref_speed: float = 1.0):
         """设置跟踪路径"""
