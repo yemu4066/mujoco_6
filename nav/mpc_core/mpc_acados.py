@@ -62,7 +62,6 @@ class AcadosMPCBase(ABC):
         #
         # acados 是否支持 solver.set(k, "W", ...) 取决于编译配置，
         # 所以先探测：失败就永久退回均匀权重，并打印一次提示。
-        self.stage_decay = float(getattr(self, 'stage_decay', 0.013))
         # v 上限 = |ref_speed| × margin，再夹到 floor 以上（保证折返/低速时不至于卡死）
         self.v_cap_margin = 1.20
         self.v_cap_floor = 0.60
@@ -88,8 +87,6 @@ class AcadosMPCBase(ABC):
         self.use_stage_weights = True
         self._stage_weights_ok = False
         self._cur_stage_w = None
-        self.use_stage_decay = True          # 待探测
-        self._stage_decay_probed = False
         self._W_base = np.array(ocp.cost.W, dtype=float, copy=True)
         assert isinstance(ocp.model.x,SX)
         # 默认初始化参数 p
@@ -153,21 +150,6 @@ class AcadosMPCBase(ABC):
             self.solver.set(k, "lbx", lb)
             self.solver.set(k, "ubx", ub)
         self._vcap_applied = True
-
-    def _apply_stage_decay(self) -> None:
-        """按指数衰减依次设置每个 stage 的 W；不支持就退回均匀权重。"""
-        if not self.use_stage_decay or self._stage_decay_probed:
-            return
-        self._stage_decay_probed = True
-        try:
-            for k in range(self.n_horizon):
-                decay = math.exp(-self.stage_decay * k)
-                self.solver.set(k, "W", self._W_base * decay)
-            print(f'[MPC] 逐 stage 权重衰减已启用：lambda={self.stage_decay:.4f}，'
-                  f'末步权重 = {math.exp(-self.stage_decay * (self.n_horizon - 1)):.3f}')
-        except Exception as exc:                     # noqa: BLE001
-            self.use_stage_decay = False
-            print(f'[MPC] 当前 acados 不支持逐 stage 设置 W，退回均匀权重（{exc}）')
 
     def _curvature_density(self) -> np.ndarray:
         """沿路径的「重要度密度」：曲率大处高，整段弯道一致，出弯后缓降。"""
@@ -268,8 +250,6 @@ class AcadosMPCBase(ABC):
 
         # 2. 设置当前状态约束
         # 首次求解前探测/应用逐 stage 权重（只做一次）
-        self._apply_stage_decay()
-
         # ★ 让 v 的硬约束跟随 ref_speed。
         #   原来 lbx/ubx 的 v 分量写死 ±5.0，而 ref_speed 只决定参考点间距，
         #   完全不影响车速。于是弯道里 ref_speed=1.4 时，车照样能开到 4.0+
