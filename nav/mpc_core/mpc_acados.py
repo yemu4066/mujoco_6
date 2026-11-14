@@ -64,7 +64,7 @@ class AcadosMPCBase(ABC):
         # 所以先探测：失败就永久退回均匀权重，并打印一次提示。
         self.stage_decay = float(getattr(self, 'stage_decay', 0.013))
         # v 上限 = |ref_speed| × margin，再夹到 floor 以上（保证折返/低速时不至于卡死）
-        self.v_cap_margin = 1.20
+        self.v_cap_margin = 1.00
         self.v_cap_floor = 0.60
         self._vcap_failed = False
         self._vcap_applied = False
@@ -156,6 +156,38 @@ class AcadosMPCBase(ABC):
             self.use_stage_decay = False
             print(f'[MPC] 当前 acados 不支持逐 stage 设置 W，退回均匀权重（{exc}）')
 
+    def _stage_queries(self, s_start: float) -> np.ndarray:
+        """沿速度剖面逐阶段积分，生成每个预测步的参考弧长。
+
+        原来用标量 ref_speed 乘 arange，只反映「脚下这一点」的速度，
+        等于假设未来 1.75 s 全程匀速。后果：
+            入弯前脚下还是 3.5 → 参考点以 3.5 的大步长整个穿过弯道，
+              等于要求弯道里也跑 3.5（物理上限 1.32）→ 冲出去
+            弯道里脚下是 1.32 → 整条参考全是 1.32 的小步长，
+              出弯后看不到直道，也不肯加速
+        改成逐点积分 s += v(s)·dt：弯道内自动密集、出弯自动恢复大步长，
+        视野跟着实际速度延伸，时间语义严格正确。
+        """
+        N = self.n_horizon + 1
+        prof = getattr(self, 'speed_profile', None)
+        if prof is None:
+            return s_start + self.ref_speed * self.dt * np.arange(N)
+
+        s_path, vmax = prof
+        s_path = np.asarray(s_path, dtype=float)
+        vmax = np.asarray(vmax, dtype=float)
+        if len(s_path) < 2 or len(vmax) < 2:
+            return s_start + self.ref_speed * self.dt * np.arange(N)
+
+        s_max = float(s_path[-1])
+        out = np.empty(N, dtype=float)
+        s_curr = float(np.clip(s_start, 0.0, s_max))
+        for k in range(N):
+            out[k] = s_curr
+            v_k = max(float(np.interp(s_curr, s_path, vmax)), 0.2)
+            s_curr = min(s_curr + v_k * self.dt, s_max)
+        return out
+
     def set_path(self, points: np.ndarray, target_yaw: float, ref_speed: float = 1.0):
         """设置跟踪路径"""
         self.path_planner.generate_path(points[:, 0], points[:, 1])
@@ -168,7 +200,7 @@ class AcadosMPCBase(ABC):
         # 1. 准备参考轨迹 (使用 p 参数)
         if self.following:
             s_start = self.path_planner.get_nearest_s(x_current[0], x_current[1])
-            s_queries = s_start + self.ref_speed * self.dt * np.arange(self.n_horizon + 1)
+            s_queries = self._stage_queries(s_start)
             ref_states_all = self.path_planner.get_states_batch(s_queries)
             
             # 由参考朝向推出路径法向量：切线 (cosθ, sinθ) → 法线 (-sinθ, cosθ)
