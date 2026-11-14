@@ -24,7 +24,6 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import TransformStamped, Twist, Vector3Stamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
-from std_msgs.msg import Float32MultiArray
 
 from nav_interfaces.msg import Obstacle, ObstacleArray
 from visualization_msgs.msg import Marker, MarkerArray
@@ -118,8 +117,6 @@ class MujocoSimNode(Node):
         # ---------------- 通信 ----------------
         self.create_subscription(Twist, 'cmd_vel', self._on_cmd_vel, 10)
         self.odom_publisher = self.create_publisher(Odometry, 'odom', 10)
-        self.wheel_angle_pub = self.create_publisher(
-            Float32MultiArray, '/wheel_angles', 10)
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
         self.base_link_state_publisher = self.create_publisher(
             Vector3Stamped, '/state/base_link', 10)
@@ -353,10 +350,6 @@ class MujocoSimNode(Node):
         odom.twist.twist.angular.y = noisy_v_ang[1]
         odom.twist.twist.angular.z = noisy_v_ang[2]
         self.odom_publisher.publish(odom)
-
-        ang = Float32MultiArray()
-        ang.data = [float(self.data.qpos[a]) for a in self.steer_qposadr]
-        self.wheel_angle_pub.publish(ang)
 
         transform = TransformStamped()
         transform.header.stamp = stamp
