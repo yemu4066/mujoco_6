@@ -62,8 +62,7 @@ class AcadosMPCBase(ABC):
         #
         # acados 是否支持 solver.set(k, "W", ...) 取决于编译配置，
         # 所以先探测：失败就永久退回均匀权重，并打印一次提示。
-        self.use_stage_weights = True
-        self._stage_weights_ok = False
+        self.stage_decay = float(getattr(self, 'stage_decay', 0.013))
         # v 上限 = |ref_speed| × margin，再夹到 floor 以上（保证折返/低速时不至于卡死）
         self.v_cap_margin = 1.20
         self.v_cap_floor = 0.60
@@ -72,12 +71,15 @@ class AcadosMPCBase(ABC):
         self._vcap_dim = None
         # 规划层可用的 |dv| 上限，用来把 v_cap 逐 step 放开
         self.dv_max_spec = 3.0
-        # 曲率加权参数
+        # 曲率加权采样的参数
+        self.view_range = 4.0      # 参考点覆盖的空间长度 [m]，与 ref_speed 解耦
         self.curv_gain = 1.0       # 曲率对密度的加权强度
         self.kappa_cap = 5.0       # 曲率上限，避免极窄拐角把密度拉爆
         # 判定"这里是弯道"的曲率阈值：κ > 此值即弯曲，密度会传过去。
         # 0.2 对应 R < 5 m；直道 κ≈0，不会被穿透。
         self.straight_kappa = 0.2
+        self.use_stage_decay = True          # 待探测
+        self._stage_decay_probed = False
         self._W_base = np.array(ocp.cost.W, dtype=float, copy=True)
         assert isinstance(ocp.model.x,SX)
         # 默认初始化参数 p
@@ -142,65 +144,87 @@ class AcadosMPCBase(ABC):
             self.solver.set(k, "ubx", ub)
         self._vcap_applied = True
 
-    def _apply_stage_weights(self, w: np.ndarray) -> None:
-        """把每 stage 的曲率权重乘进 W；不支持就退回均匀权重。"""
-        if not self.use_stage_weights:
+    def _apply_stage_decay(self) -> None:
+        """按指数衰减依次设置每个 stage 的 W；不支持就退回均匀权重。"""
+        if not self.use_stage_decay or self._stage_decay_probed:
             return
+        self._stage_decay_probed = True
         try:
             for k in range(self.n_horizon):
-                self.solver.set(k, "W", self._W_base * float(w[k]))
-            if not self._stage_weights_ok:
-                self._stage_weights_ok = True
-                print(f'[MPC] 逐 stage 曲率权重已启用：'
-                      f'min={float(np.min(w)):.2f} max={float(np.max(w)):.2f}')
+                decay = math.exp(-self.stage_decay * k)
+                self.solver.set(k, "W", self._W_base * decay)
+            print(f'[MPC] 逐 stage 权重衰减已启用：lambda={self.stage_decay:.4f}，'
+                  f'末步权重 = {math.exp(-self.stage_decay * (self.n_horizon - 1)):.3f}')
         except Exception as exc:                     # noqa: BLE001
-            self.use_stage_weights = False
+            self.use_stage_decay = False
             print(f'[MPC] 当前 acados 不支持逐 stage 设置 W，退回均匀权重（{exc}）')
 
-    def _curvature_density(self) -> np.ndarray:
-        """沿路径的「重要度密度」：曲率大处高，并传播到直道为止。"""
+    def _curvature_weighted_queries(self, s_start: float) -> np.ndarray:
+        """按局部曲率分配参考点：拐角多放点，直道少放点。
+
+        MPC 手上只有一条参考点序列，看不到墙。它对"哪里需要转弯"的唯一
+        信息来源就是路径本身的几何 —— 也就是相邻参考点的切线角变化
+        （Δθ = ds/R，正比于曲率 κ）。
+
+        均匀等弧长排列时，直角拐角只占 176 个点里的 13 个（7.4%），
+        优化器为了迎合剩下的 163 个直道点，会选一条平滑过渡的曲线，
+        也就是"切角"。这里把点按曲率重新分布：拐角密度高 → 点数多 →
+        在 Σ||x_k − p_k||² 里占比大 → 优化器必须贴住拐角。
+
+        总视野仍然保持 view_range 不变，只是把点数从直道挪到弯道。
+        """
         pl = self.path_planner
         s_path = np.asarray(pl.s_samples, dtype=float)
         yaw_u = np.asarray(pl.yaw_path_unwrapped, dtype=float)
         if len(s_path) < 3:
-            return np.ones(max(len(s_path), 2), dtype=float)
+            # 路径太短，退回等弧长
+            step = self.view_range / self.n_horizon
+            return s_start + step * np.arange(self.n_horizon + 1)
 
-        ds = np.maximum(np.diff(s_path), 1e-6)
-        kappa = np.minimum(np.abs(np.diff(yaw_u)) / ds, self.kappa_cap)
-        density = 1.0 + self.curv_gain * kappa
+        ds = np.maximum(np.diff(s_path), 1e-6)       # 长度 n-1
+        kappa = np.abs(np.diff(yaw_u)) / ds          # 离散曲率，长度 n-1
+        # 限幅，避免极窄拐角把密度拉爆（拐角处 kappa 可以到 10+）
+        kappa = np.minimum(kappa, self.kappa_cap)
 
-        is_curve = kappa > self.straight_kappa
+        # ① 原始密度：曲率越大密度越高
+        density = 1.0 + self.curv_gain * kappa      # 长度 n-1
+
+        # ② 把高密度「扩散」出去，形成约束带 —— **一直传到直道为止**。
+        #   不是按固定距离衰减：那样扩散范围由 decay 决定，拐角外 1 m
+        #   就回到 1 了，中间那段仍然是松的。
+        #   这里用曲率当"墙"：只要邻居还是弯道（κ > straight_kappa），
+        #   就把它的密度传过来（取最大值，不衰减）；碰到直道就停。
+        #   于是整段弯道都拿到同一个高密度，直道保持 1。
+        is_curve = kappa > self.straight_kappa            # 长度 n-1
         d = density.copy()
-        for k in range(1, len(d)):
+        for k in range(1, len(d)):                        # 后向
             if is_curve[k - 1]:
                 d[k] = max(d[k], d[k - 1])
-        for k in range(len(d) - 2, -1, -1):
+        for k in range(len(d) - 2, -1, -1):               # 前向
             if is_curve[k + 1]:
                 d[k] = max(d[k], d[k + 1])
-        return np.concatenate([d, d[-1:]])
+        density = d
 
-    def _stage_weights(self, s_start: float) -> np.ndarray:
-        """每个 stage 的权重倍率（长度 n_horizon+1）。
+        cum = np.concatenate(([0.0], np.cumsum(density * ds)))   # 长度 n
+        if cum[-1] < 1e-9:
+            step = self.view_range / self.n_horizon
+            return s_start + step * np.arange(self.n_horizon + 1)
+        cum /= cum[-1]                               # 归一化到 [0, 1]
 
-        参考点在弧长上均匀排布，权重由该处的曲率密度决定，
-        逐 stage 乘到 W 上。
-        """
-        pl = self.path_planner
-        s_path = np.asarray(pl.s_samples, dtype=float)
-        dens = self._curvature_density()
-        if len(s_path) < 2 or len(dens) != len(s_path):
-            return np.ones(self.n_horizon + 1, dtype=float)
+        # 关键：在**权重累积坐标**上等间隔取样，再反查弧长。
+        # 如果先按弧长等分再转权重再转回来，那是恒等变换，等于没加密。
         s_lo = max(0.0, float(s_start))
-        s_q = s_lo + self.ref_speed * self.dt * np.arange(self.n_horizon + 1)
-        s_q = np.minimum(s_q, float(s_path[-1]))
-        return np.interp(s_q, s_path, dens)
+        s_hi = float(s_path[-1])
+        s_end = min(s_lo + self.view_range, s_hi)
+        if s_end - s_lo < 1e-6:
+            step = self.view_range / self.n_horizon
+            return s_start + step * np.arange(self.n_horizon + 1)
 
-    def _curvature_weighted_queries(self, s_start: float) -> np.ndarray:
-        """参考点排布：保持原来的 ref_speed × dt 间距（视野不变）。
-
-        曲率加权只通过逐 stage 的 W 体现，不改变采样间距。
-        """
-        return s_start + self.ref_speed * self.dt * np.arange(self.n_horizon + 1)
+        w_lo = float(np.interp(s_lo, s_path, cum))
+        w_hi = float(np.interp(s_end, s_path, cum))
+        wq = np.linspace(w_lo, w_hi, self.n_horizon + 1)   # 权重空间等间隔
+        s_q = np.interp(wq, cum, s_path)                   # 反查弧长
+        return np.clip(s_q, s_lo, s_hi)
 
     def set_path(self, points: np.ndarray, target_yaw: float, ref_speed: float = 1.0):
         """设置跟踪路径"""
@@ -215,7 +239,6 @@ class AcadosMPCBase(ABC):
         if self.following:
             s_start = self.path_planner.get_nearest_s(x_current[0], x_current[1])
             s_queries = self._curvature_weighted_queries(s_start)
-            self._cur_stage_w = self._stage_weights(s_start)
             ref_states_all = self.path_planner.get_states_batch(s_queries)
             
             # 由参考朝向推出路径法向量：切线 (cosθ, sinθ) → 法线 (-sinθ, cosθ)
@@ -232,9 +255,7 @@ class AcadosMPCBase(ABC):
 
         # 2. 设置当前状态约束
         # 首次求解前探测/应用逐 stage 权重（只做一次）
-        w = getattr(self, '_cur_stage_w', None)
-        if w is not None:
-            self._apply_stage_weights(w)
+        self._apply_stage_decay()
 
         # ★ 让 v 的硬约束跟随 ref_speed。
         #   原来 lbx/ubx 的 v 分量写死 ±5.0，而 ref_speed 只决定参考点间距，
