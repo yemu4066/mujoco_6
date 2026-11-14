@@ -136,7 +136,9 @@ class AcadosMPCBase(ABC):
         #   实测：v=2.0、v_cap=0.6 时需要 47 步才能降下来。
         #   正确做法：第 k 步的上限 = min(v_cap, v_now + dv_lim·dt·k)。
         target = float(ub3[0])
-        for k in range(1, self.n_horizon + 1):
+        # 注意到 n_horizon（不含）为止：终端 stage 用的是 lbx_e/ubx_e，
+        # 没有 lbx/ubx，对它 set 会报 "mismatching dimension ... dimension 0"。
+        for k in range(1, self.n_horizon):
             # 第 k 步 v 最低只能降到 v_now − dv·dt·k（受 dv 约束），
             # 所以上限不能低于这个值，否则约束物理不可达。
             reachable_floor = v_now - dv_lim * self.dt * k
