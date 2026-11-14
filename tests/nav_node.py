@@ -88,6 +88,8 @@ class NavNode(Node):
         self.speed_pub = self.create_publisher(Float32MultiArray, '/speed', 10)
         self.speed_label_pub = self.create_publisher(
             MarkerArray, '/speed_label', 10)
+        # MPC 参考点可视化
+        self.ref_pub = self.create_publisher(MarkerArray, '/mpc_ref', 10)
 
         self.create_subscription(PoseStamped, '/goal_pose', self._on_goal, 10)
         self.create_subscription(Odometry, '/odom', self._on_odom, 20)
@@ -112,6 +114,7 @@ class NavNode(Node):
         # 启动时发的那一条 TRANSIENT_LOCAL 历史消息，所以隔一秒再发一次。
         self.create_timer(1.0, lambda: self.map_pub.publish(self._map_msg))
         self.create_timer(0.5, self._publish_debug_obstacles)
+        self.create_timer(0.1, self._publish_ref_points)
         self.get_logger().info(
             f'/costmap {self._map_msg.info.width}x{self._map_msg.info.height}，'
             f'自由格 {int((self.nav.costmap.data == 0).sum())}')
@@ -242,6 +245,39 @@ class NavNode(Node):
         arr2 = MarkerArray()
         arr2.markers.append(m)
         self.speed_label_pub.publish(arr2)
+
+    def _publish_ref_points(self) -> None:
+        """把 MPC 这一帧实际用的参考点发出来（颜色按权重深浅）。"""
+        pts = getattr(self.nav.mpc, 'last_ref_points', None)
+        if pts is None:
+            return
+        w = getattr(self.nav.mpc, 'last_ref_weights', None)
+        arr = MarkerArray()
+        now = self.get_clock().now().to_msg()
+        for k, (x, y, th) in enumerate(pts):
+            m = Marker()
+            m.header.frame_id = 'map'
+            m.header.stamp = now
+            m.ns = 'mpc_ref'
+            m.id = k
+            m.type = Marker.SPHERE
+            m.action = Marker.ADD
+            m.pose.position.x = float(x)
+            m.pose.position.y = float(y)
+            m.pose.position.z = 0.06
+            m.pose.orientation.w = 1.0
+            # 权重越大球越大、越红
+            wk = float(w[k]) if w is not None and k < len(w) else 1.0
+            scale = 0.04 + 0.03 * min(wk, 5.0) / 5.0
+            m.scale.x = m.scale.y = m.scale.z = scale
+            # 权重 1 → 蓝(0.2,0.5,1)，权重 4 → 红(1,0.2,0.2)
+            t = min(max((wk - 1.0) / 3.0, 0.0), 1.0)
+            m.color.r = 0.2 + 0.8 * t
+            m.color.g = 0.5 - 0.3 * t
+            m.color.b = 1.0 - 0.8 * t
+            m.color.a = 0.9
+            arr.markers.append(m)
+        self.ref_pub.publish(arr)
 
     def _publish_debug_obstacles(self) -> None:
         """把手动障碍画成 Marker，让人在 Foxglove 里看得见。"""

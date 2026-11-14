@@ -80,6 +80,8 @@ class AcadosMPCBase(ABC):
         # 0.2 对应 R < 5 m；直道 κ≈0，不会被穿透。
         self.straight_kappa = 0.2
         self._last_effective_view = 0.0
+        self.last_ref_points = None      # (N+1, 3) 参考点 (x, y, θ)
+        self.last_ref_weights = None     # (N+1,)  每点权重
         # 弯道之外「缓降」的每步保留比例（点间距约 5cm）：
         #   0.97 → 0.5m 后 0.74，1.0m 后 0.55，2.0m 后 0.30，3.0m 后 0.16
         self.density_decay = 0.97
@@ -283,6 +285,10 @@ class AcadosMPCBase(ABC):
                 np.full(self.n_horizon + 1, n0x),
                 np.full(self.n_horizon + 1, n0y),
             ])  # (n+1, 5)
+
+            # 存一份参考点，给 foxglove 可视化（nav_node 会发布成 MarkerArray）
+            self.last_ref_points = ref_states_all.copy()
+            self.last_ref_weights = self._stage_weights(s_start)
 
             [self.solver.set(k, "p", ref_p[k]) for k in range(self.n_horizon)]
             self.solver.set(self.n_horizon, "p", ref_p[-1])
