@@ -76,6 +76,7 @@ class AcadosMPCBase(ABC):
         # 可视化用（只读，不参与控制）
         self.last_ref_points = None      # (N+1, 3) 参考点 (x, y, θ)
         self.last_pred_traj = None       # (M, 3)   MPC 预测轨迹 (x, y, θ)
+        self.view_range = 4.0            # 参考点视野 [m]；None = ref_speed×dt×n_horizon
         self._W_base = np.array(ocp.cost.W, dtype=float, copy=True)
         assert isinstance(ocp.model.x,SX)
         # 默认初始化参数 p
