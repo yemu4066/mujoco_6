@@ -102,8 +102,15 @@ class NavNode(Node):
                                  self._on_debug_obstacle, 10)
         self.create_subscription(Empty, '/debug_obstacle_clear',
                                  self._on_debug_clear, 10)
+        # 每次平移（TRACK）开始前，先把四个轮子摆到路径方向
+        self.create_subscription(Float32MultiArray, '/wheel_angles',
+                                 self._on_wheel_angles, 10)
 
         self.pose = None
+        self._wheel_angles = None       # 四个轮子的转向角 [rad]
+        self._wheels_ready = True       # 本次平移是否已完成轮子预摆
+        self.wheel_align_tol = 0.05     # 轮角到位容差 [rad] ≈ 2.9°
+        self.wheel_creep_speed = 0.03   # 预摆期间的微速 [m/s]
         self._scan_logged = False
         self._has_scan = False
         self.obstacle_z_max = 1.0    # 高于这个高度的障碍忽略（够不着）
@@ -138,6 +145,7 @@ class NavNode(Node):
             self.get_logger().warn('还没有 /odom，忽略目标')
             return
         yaw = yaw_of(msg.pose.orientation)
+        self._wheels_ready = False      # 新目标：重新摆一次轮子
         ok = self.nav.set_goal(msg.pose.position.x, msg.pose.position.y, yaw,
                                pose=self.pose)
         if not ok:
@@ -206,6 +214,31 @@ class NavNode(Node):
         """清空手动障碍。"""
         self.nav.clear_manual_obstacles()
         self.get_logger().info('[debug] 已清空手动障碍')
+
+    def _on_wheel_angles(self, msg: Float32MultiArray) -> None:
+        self._wheel_angles = list(msg.data)
+
+    def _path_heading(self) -> float | None:
+        """车当前位置处，路径切线在世界系下的方向角 [rad]。"""
+        path = self.nav.path
+        if path is None or len(path) < 2 or self.pose is None:
+            return None
+        d = np.hypot(path[:, 0] - self.pose[0], path[:, 1] - self.pose[1])
+        k = int(np.argmin(d))
+        k2 = min(k + 1, len(path) - 1)
+        if k2 == k:
+            k2 = max(0, k - 1)
+            k, k2 = k2, k
+        return math.atan2(path[k2, 1] - path[k, 1], path[k2, 0] - path[k, 0])
+
+    def _wheels_point_to(self, target_steer: float) -> bool:
+        """四个轮子的转向角是否都已摆到 target_steer 附近。"""
+        a = self._wheel_angles
+        if not a or len(a) < 4:
+            return True                       # 没数据就不拦
+        return all(abs(math.atan2(math.sin(x - target_steer),
+                                  math.cos(x - target_steer))) < self.wheel_align_tol
+                   for x in a)
 
     def _publish_speed(self, vx: float, vy: float, speed: float) -> None:
         """发布实时速率：数值 /speed（画曲线）+ 文字 /speed_label（3D 里看）。"""
@@ -313,6 +346,28 @@ class NavNode(Node):
 
         if self.nav.phase == 'IDLE':
             return
+
+        # ★ 每次平移（TRACK）开始前，先把四个轮子摆到路径方向。
+        #   轮子的目标角是「车体系下的速度方向」= 路径切线 − 车头 yaw。
+        #   发零速度轮子不会转（solve 里 speeds 为 0 时保持上次目标），
+        #   所以用 wheel_creep_speed 的微速推着它转到位。
+        if self.nav.phase == 'TRACK' and not self._wheels_ready:
+            heading = self._path_heading()
+            if heading is None:
+                self._wheels_ready = True          # 没路径就不拦
+            else:
+                target_steer = math.atan2(math.sin(heading - self.pose[2]),
+                                          math.cos(heading - self.pose[2]))
+                if self._wheels_point_to(target_steer):
+                    self._wheels_ready = True
+                    self.get_logger().info(
+                        f'轮子已对准路径（目标 {math.degrees(target_steer):+.1f}°），开始平移')
+                else:
+                    twist = Twist()
+                    twist.linear.x = self.wheel_creep_speed * math.cos(target_steer)
+                    twist.linear.y = self.wheel_creep_speed * math.sin(target_steer)
+                    self.cmd_pub.publish(twist)
+                    return
 
         cmd = self.nav.update(*self.pose)
         t = Twist()
