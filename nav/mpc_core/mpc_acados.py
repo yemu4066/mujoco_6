@@ -288,7 +288,9 @@ class AcadosMPCBase(ABC):
 
             # 存一份参考点，给 foxglove 可视化（nav_node 会发布成 MarkerArray）
             self.last_ref_points = ref_states_all.copy()
-            self.last_ref_weights = self._stage_weights(s_start)
+            # 当前是 A 方案（曲率密度内联在 _curvature_weighted_queries 里），
+            # 没有单独的 _stage_weights()。这里留空，Marker 用统一外观。
+            self.last_ref_weights = None
 
             [self.solver.set(k, "p", ref_p[k]) for k in range(self.n_horizon)]
             self.solver.set(self.n_horizon, "p", ref_p[-1])
