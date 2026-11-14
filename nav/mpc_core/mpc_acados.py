@@ -407,14 +407,17 @@ class AugmentedSwerveMPC(AcadosMPCBase):
         #       W·(sqrt(w)·e)² = W·w·e²
         #   p[5] 由 Python 侧逐 stage 传入（ref_p[:, 5] = sqrt(w_k)）。
         sw = ocp.model.p[5]
-        pos_err_w = pos_err * sw
-        lateral_err_w = lateral_err * sw
 
-        # Cost: [位置(2), 运动方向(1), 横向(1), 状态(3), 控制率(3)] = 10
-        ocp.model.cost_y_expr = vertcat(pos_err_w, heading_err, lateral_err_w,
-                                        ocp.model.x[3:6], ocp.model.u)
-        ocp.model.cost_y_expr_e = vertcat(pos_err_w, heading_err, lateral_err_w,
-                                          ocp.model.x[3:6])
+        # ★ 必须**整条 y 都乘** sw，不能只乘位置/横向那几项。
+        #   只乘部分项会改变代价的内部比例：实测 w=4.14 时运动方向项
+        #   的占比从 3.2% 掉到 0.7%（↓78%），而 α 是唯一的转弯手段，
+        #   方向项变弱 → α 转不够 → 弯道过冲。
+        #   全部乘 sw 的效果是「这个 stage 整体更重要 w 倍」，
+        #   内部各项目的比例不变。
+        ocp.model.cost_y_expr = vertcat(pos_err, heading_err, lateral_err,
+                                        ocp.model.x[3:6], ocp.model.u) * sw
+        ocp.model.cost_y_expr_e = vertcat(pos_err, heading_err, lateral_err,
+                                          ocp.model.x[3:6]) * sw
         
         ocp.cost.cost_type = ocp.cost.cost_type_e = 'NONLINEAR_LS'
         # 位置权重下调到 0.5：反正有横向项管住"别偏"，不再需要靠位置项硬拉。
