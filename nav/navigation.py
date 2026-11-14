@@ -321,23 +321,16 @@ class Navigation:
             np.asarray(self._path_vmax, dtype=float),
         )
 
-        # 重置 warm start（x/u/pi/lam）后**必须**重新填 x/u 猜测，
-        # 否则求解器从全零出发、首帧解出接近零的控制量 —— 表现为
-        # 「设了目标点车不动」。这里 reset 之后按当前状态铺一条初始猜测。
-        try:
-            if hasattr(self.mpc.solver, 'reset'):
-                self.mpc.solver.reset()
-                x0_aug = np.concatenate([
-                    np.array([float(start[0]), float(start[1]), float(start[2])]),
-                    np.asarray(self.mpc.last_aug_state, dtype=float),
-                ])
-                for k in range(self.mpc.n_horizon + 1):
-                    self.mpc.solver.set(k, "x", x0_aug)
-                for k in range(self.mpc.n_horizon):
-                    self.mpc.solver.set(k, "u", np.zeros(3))
-                print('[MPC] 已重置 warm start 并按当前状态铺初值', flush=True)
-        except Exception as exc:               # noqa: BLE001
-            print(f'[MPC] warm start 重置跳过（{exc}）', flush=True)
+        # warm start 重置已暂时停用：怀疑 solver.reset() 在换目标时把
+        # 求解器内部状态（或约束/参考）打乱，导致首帧解出零控制量、车不动。
+        # 先关掉它，确认其它三项（逐阶段积分 / v_cap=1.0 / alpha 不伪造）
+        # 能否单独正常工作。
+        # try:
+        #     if hasattr(self.mpc.solver, 'reset'):
+        #         self.mpc.solver.reset()
+        #         ...
+        # except Exception:
+        #     pass
         self._phase = TRACK
         self._blocked = False
         self.last_error = ''
