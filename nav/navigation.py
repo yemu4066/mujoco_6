@@ -298,39 +298,18 @@ class Navigation:
         #   4 m/s 下白走 1.57 m 的斜线，看起来就是"启动不按路径走"。
         #   直接给它正确的初值，MPC 第一帧起就知道该往哪走。
         try:
-            # ★ 只把 v 归零，绝不覆写 alpha。
-            #   α 的物理含义是「轮子该指向的角度」（swerve_solver 直接拿它当
-            #   desired_angle）。把它瞬移成新路径的方向，等于告诉 MPC
-            #   「轮子已经转到那儿了」，MPC 就会算 dα=0、直接给速度；
-            #   而物理轮子还停在 alpha_old，转向过程中车按旧方向冲出去
-            #   —— 这就是第二次及以后下发目标点时那段「U 型狗腿」。
-            #   保留 alpha_old，MPC 自己会在 dα <= 4.0 内规划平滑转向。
-            alpha_keep = float(self.mpc.last_aug_state[1])
-            self.mpc.last_aug_state = np.array(
-                [0.0, alpha_keep, 0.0], dtype=np.float64)
+            if len(points) >= 2:
+                seg = points[1] - points[0]
+                path_heading = math.atan2(float(seg[1]), float(seg[0]))
+                alpha0 = wrap_angle(path_heading - float(start[2]))
+                self.mpc.last_aug_state = np.array(
+                    [float(self.mpc.last_aug_state[0]), alpha0, 0.0])
         except Exception:                      # noqa: BLE001
             pass
 
         self._goal = (float(x), float(y), float(yaw))
         self._path = points
         self._build_speed_profile(points)
-
-        # 把速度剖面交给 MPC：_stage_queries 要按 v(s) 逐阶段积分
-        self.mpc.speed_profile = (
-            np.asarray(self.mpc.path_planner.s_samples, dtype=float),
-            np.asarray(self._path_vmax, dtype=float),
-        )
-
-        # warm start 重置已暂时停用：怀疑 solver.reset() 在换目标时把
-        # 求解器内部状态（或约束/参考）打乱，导致首帧解出零控制量、车不动。
-        # 先关掉它，确认其它三项（逐阶段积分 / v_cap=1.0 / alpha 不伪造）
-        # 能否单独正常工作。
-        # try:
-        #     if hasattr(self.mpc.solver, 'reset'):
-        #         self.mpc.solver.reset()
-        #         ...
-        # except Exception:
-        #     pass
         self._phase = TRACK
         self._blocked = False
         self.last_error = ''
@@ -601,38 +580,8 @@ class Navigation:
         return float((x - ref[0]) * nx + (y - ref[1]) * ny)
 
     def _apply_speed_limit(self) -> None:
-        """按当前位置从速度剖面里取参考推进速度。
-
-        速度剖面 _path_vmax 由 _build_speed_profile 生成：
-            曲率限速  v <= min(sqrt(a_lat·R), dα·R)
-            反向制动包络（brake_decel）保证相邻点速度差物理可达
-        每帧按 s_start 查表，所以进弯前会自动、平滑地降速。
-
-        原来这里恒定返回 ref_speed（4.0），等于把整条剖面作废 ——
-        MPC 的参考点永远以 4 m/s 前进，弯道也一样，于是 4 m/s 过
-        R=0.35 的弯（需要 dα=11.4 rad/s，而约束只有 4.0）必然冲出去。
-        """
-        vmax = self._path_vmax
-        pl = self.mpc.path_planner
-        s_path = np.asarray(getattr(pl, 's_samples', []), dtype=float)
-        if vmax is None or len(vmax) < 2 or len(s_path) < 2 or self._last_pose is None:
-            self.mpc.ref_speed = float(self.ref_speed)
-            return
-
-        s_now = pl.get_nearest_s(self._last_pose[0], self._last_pose[1])
-        # 诊断：每 50 帧打一次，看限速到底给了多少
-        self._dbg_n = getattr(self, '_dbg_n', 0) + 1
-        if self._dbg_n % 50 == 0:
-            print(f'[SPD] s_now={s_now:.2f}/{s_path[-1]:.2f} '
-                  f'vmax=[{vmax.min():.2f},{vmax.max():.2f}] '
-                  f'len(vmax)={len(vmax)} len(s)={len(s_path)}', flush=True)
-        # vmax 是按 points 索引的，和 s_samples 粒度可能不同，统一插值
-        v_ref_profile = np.linspace(0.0, float(s_path[-1]), len(vmax))
-        v = float(np.interp(s_now, v_ref_profile, vmax))
-        self.mpc.ref_speed = max(v, self.speed_min)
-        if self._dbg_n % 50 == 0:
-            print(f'[SPD] v_ref={self.mpc.ref_speed:.3f} '
-                  f'(interp={v:.3f})', flush=True)
+        """参考推进速度：恒定，不随路径曲率/包络变化。"""
+        self.mpc.ref_speed = float(self.ref_speed)
 
     # ================================================================
     # 动态障碍

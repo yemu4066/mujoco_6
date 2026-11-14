@@ -64,7 +64,7 @@ class AcadosMPCBase(ABC):
         # 所以先探测：失败就永久退回均匀权重，并打印一次提示。
         self.stage_decay = float(getattr(self, 'stage_decay', 0.013))
         # v 上限 = |ref_speed| × margin，再夹到 floor 以上（保证折返/低速时不至于卡死）
-        self.v_cap_margin = 1.00
+        self.v_cap_margin = 1.20
         self.v_cap_floor = 0.60
         self._vcap_failed = False
         self._vcap_applied = False
