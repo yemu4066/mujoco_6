@@ -292,6 +292,21 @@ class Navigation:
                              adaptive=self.smooth_adaptive)
         self.mpc.set_path(points, target_yaw=float(yaw), ref_speed=self.ref_speed)
 
+        # ★ 把 MPC 内部的 α 初值设成「路径方向 − 车头方向」。
+        #   α 是增广状态，默认从 0 开始（= 运动方向与车头一致），
+        #   于是起步时要靠 dα ≤ 4 rad/s 一格格爬过去：90° 差要 0.39 s、
+        #   4 m/s 下白走 1.57 m 的斜线，看起来就是"启动不按路径走"。
+        #   直接给它正确的初值，MPC 第一帧起就知道该往哪走。
+        try:
+            if len(points) >= 2:
+                seg = points[1] - points[0]
+                path_heading = math.atan2(float(seg[1]), float(seg[0]))
+                alpha0 = wrap_angle(path_heading - float(start[2]))
+                self.mpc.last_aug_state = np.array(
+                    [float(self.mpc.last_aug_state[0]), alpha0, 0.0])
+        except Exception:                      # noqa: BLE001
+            pass
+
         self._goal = (float(x), float(y), float(yaw))
         self._path = points
         self._build_speed_profile(points)
