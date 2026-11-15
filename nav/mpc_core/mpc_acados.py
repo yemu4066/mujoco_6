@@ -478,7 +478,10 @@ class AugmentedSwerveMPC(AcadosMPCBase):
         # W[2] 0.2 → 1.2：τ = 1/(v·sqrt(q_lat/W[2]))，q_lat=9.0、v=4.0
         #   → τ = 1/(4·sqrt(9/1.2)) = 0.091 s，刚大于 30° 转舵滞后
         #   0.087 s（dα=6.0 时）。0.8 只有 0.075 s 仍欠阻尼。
-        ocp.cost.W = np.diag([1.0, 1.0, 1.2, 8.0, 0, 0, 0, 0.05, 0.05, 0.2])
+        # 横向 8.0 → 12.0（横纵比 13:1），让车更贴曲线；
+        # 加速度代价 dv 0.05 → 0.02，让加减速更果断。
+        # 索引：0/1 位置、2 方向、3 横向、4/5/6 v/α/ω、7 dv、8 dα、9 dω
+        ocp.cost.W = np.diag([1.0, 1.0, 1.2, 12.0, 0, 0, 0, 0.02, 0.05, 0.2])
         ocp.cost.W_e = np.diag([4.0, 4.0, 0.2, 4.0, 0.2, 0.2, 0.2])
 
     def update(self, x_current: np.ndarray) -> np.ndarray:
