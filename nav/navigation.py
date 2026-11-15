@@ -221,11 +221,6 @@ class Navigation:
         self.stuck_frames_threshold = 30   # 约 0.3 s（10 ms 一帧）
         self.kick_speed = 0.15             # 脱困速度 [m/s]
         self.last_error = ''        # 最近一次 set_goal 失败的原因
-        # 起步对齐门控（只压 v_cap，不动 ref_speed）
-        self.enable_start_gate = False   # 起步门控总开关（先关掉验证基线）
-        self._has_received_goal = False
-        self._align_hold_time = 0.0
-        self._goal_start_time = 0.0
 
     # ================================================================
     # 对外接口
@@ -249,7 +244,6 @@ class Navigation:
         if start is None:
             raise RuntimeError('还没有位姿，请先调 update() 或显式传 pose')
 
-        print(f'[SET_GOAL] called! target=({x:.2f},{y:.2f}) pose={start}', flush=True)
         spec = self.costmap.spec
         si, sj = spec.world_to_index(start[0], start[1])
         gi, gj = spec.world_to_index(x, y)
@@ -308,23 +302,8 @@ class Navigation:
                 seg = points[1] - points[0]
                 path_heading = math.atan2(float(seg[1]), float(seg[0]))
                 alpha0 = wrap_angle(path_heading - float(start[2]))
-
-                # 先读旧 alpha（必须在覆写之前），据此估算物理轮子转到位
-                # 需要多久；首个目标点不做等待。
-                if self._has_received_goal:
-                    old_alpha = float(self.mpc.last_aug_state[1])
-                    d_alpha = abs(wrap_angle(alpha0 - old_alpha))
-                    # 底层 steer_rate_limit=8.0，除以 6.0 留 ~25% 余量
-                    self._align_hold_time = min(d_alpha / 6.0, 0.35)
-                else:
-                    self._align_hold_time = 0.0
-                self._has_received_goal = True
-                self._goal_start_time = time.monotonic()
-
-                # v 归零（消掉上一趟残留的初速度冲击），alpha 仍用 alpha0：
-                # 保留 alpha0 时 cos(Δα)=1，v=0 不会触发「梯度消失锁死」。
                 self.mpc.last_aug_state = np.array(
-                    [0.0, alpha0, 0.0], dtype=np.float64)
+                    [float(self.mpc.last_aug_state[0]), alpha0, 0.0])
         except Exception:                      # noqa: BLE001
             pass
 
@@ -407,26 +386,6 @@ class Navigation:
 
         # ---- 按横向余量调整参考速度 ----
         self._apply_speed_limit()
-
-        # ---- 起步对齐门控：只压 v_cap，不动 ref_speed ----
-        # 对齐期 0.15 m/s（轮子转正，位移 < 8 cm），之后 0.3 s 线性放开。
-        dt_goal = time.monotonic() - self._goal_start_time
-        # 门控总开关：关掉后 v_cap 完全不受限，用来验证 fb29347 基线
-        if not self.enable_start_gate:
-            self.mpc.v_cap_extra = None
-        elif dt_goal < self._align_hold_time:
-            self.mpc.v_cap_extra = 0.15
-        elif dt_goal < self._align_hold_time + 0.30:
-            ratio = (dt_goal - self._align_hold_time) / 0.30
-            self.mpc.v_cap_extra = 0.15 + (4.0 - 0.15) * ratio
-        else:
-            self.mpc.v_cap_extra = None
-
-        self._gate_n = getattr(self, '_gate_n', 0) + 1
-        if self._gate_n % 50 == 0:
-            print(f'[GATE] dt={dt_goal:.3f}s hold={self._align_hold_time:.3f}s '
-                  f'extra={self.mpc.v_cap_extra} ref_speed={self.mpc.ref_speed:.3f}',
-                  flush=True)
 
         # ---- 阶段 ①：MPC 跟踪 ----
         u = self.mpc.update(np.array([x, y, yaw]))

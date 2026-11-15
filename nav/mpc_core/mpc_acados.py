@@ -66,7 +66,6 @@ class AcadosMPCBase(ABC):
         # v 上限 = |ref_speed| × margin，再夹到 floor 以上（保证折返/低速时不至于卡死）
         self.v_cap_margin = 1.20
         self.v_cap_floor = 0.60
-        self.v_cap_extra = None      # 外部临时压低的速度上限（起步对齐期用）
         self._vcap_failed = False
         self._vcap_applied = False
         self._vcap_dim = None
@@ -127,17 +126,7 @@ class AcadosMPCBase(ABC):
         #   实测：v=2.0、v_cap=0.6 时需要 47 步才能降下来。
         #   正确做法：第 k 步的上限 = min(v_cap, v_now + dv_lim·dt·k)。
         target = float(ub3[0])
-        # 到 n_horizon（不含）：终端 stage 用 lbx_e/ubx_e，没有 lbx/ubx
-        #
-        # ★ 只在 v_now 变化时才重设。v_cap 恒为 ref_speed×1.2=4.8、
-        #   cap_k 一路也是 4.8；无条件每帧重设就是 174 stage × 2 次 C 调用
-        #   （34800 次/秒），纯无效开销，会把 100 Hz 控制循环拖慢，
-        #   表现为轨迹抖动/不跟路径。
-        cache = getattr(self, '_vcap_cache', None)
-        if cache is not None and abs(cache[0] - v_now) < 1e-3:
-            return
-        self._vcap_cache = (v_now, target)
-        for k in range(1, self.n_horizon):
+        for k in range(1, self.n_horizon + 1):
             # 第 k 步 v 最低只能降到 v_now − dv·dt·k（受 dv 约束），
             # 所以上限不能低于这个值，否则约束物理不可达。
             reachable_floor = v_now - dv_lim * self.dt * k
@@ -240,10 +229,6 @@ class AcadosMPCBase(ABC):
         if self.following and not self._vcap_failed:
             v_cap = abs(float(self.ref_speed)) * self.v_cap_margin
             v_cap = max(v_cap, self.v_cap_floor)
-            # 起步对齐期：外部传进来的临时上限，允许低于 floor
-            extra = getattr(self, 'v_cap_extra', None)
-            if extra is not None:
-                v_cap = min(v_cap, float(extra))
             # idxbx 只选了 v/α/ω 三个状态，所以 lbx/ubx 必须是长度 3
             lb = np.array([-v_cap, -math.pi, 0.0])
             ub = np.array([v_cap, math.pi, 0.0])
@@ -433,13 +418,6 @@ class AugmentedSwerveMPC(AcadosMPCBase):
         # 但 W[2] 本质是横向回线的「阻尼」：e_lat_dot ≈ v·e_ψ，
         # 惩罚 e_ψ 就是惩罚回线速度。实测切入角从 31.4° 掉到 7.0°，
         # 收敛距离从 0.55 m 涨到 2.45 m —— 车平行于路径平移，窄道撞墙。
-        # 回到 fb29347 基线：位置 2.0 / 横向 4.0（横纵比 3:1）/ 方向 0.2
-        #
-        # 试过 W[2]=4.0：过阻尼，切入角从 31° 掉到 7°，平行偏置撞墙。
-        # 试过方案 B（1.5/1.2/8.0，横纵比 6.3:1）：MPC 算出「减速换横向精度」
-        #   更划算，主动掉到 ~1.4 m/s；而 s_queries 仍按 ref_speed=4.0 铺 7 m，
-        #   车落后 3~4 m 后用前方弯道的切线算当前横向误差 → 被拽偏。
-        # 所以先回到基线，只靠起步门控掐掉初始大偏差这个振荡激励源。
         ocp.cost.W = np.diag([2.0, 2.0, 0.2, 4.0, 0, 0, 0, 0.05, 0.2, 0.2])
         ocp.cost.W_e = np.diag([4.0, 4.0, 0.2, 4.0, 0.2, 0.2, 0.2])
 
