@@ -49,6 +49,13 @@ class MujocoSimNode(Node):
         self.declare_parameter('obstacle_l2_speed', 0.2)
         self.declare_parameter('obstacle_l2_orbit_radius', 0.85)
         self.declare_parameter('obstacle_height', 0.5)
+        # 两个移动对手的 mocap 中心 z。
+        # rc2027 里它们是「站在台面上的对手机器人」：L1 台面 0.625 + 半高 0.25
+        # = 0.875；L2 台面 0.925 + 0.25 = 1.175。默认值必须保持，否则
+        # rc2027 的方块会掉到台面以下。
+        # 空白场没有台面，用 -p obstacle_z_l1:=0.25 贴地。
+        self.declare_parameter('obstacle_z_l1', 0.875)
+        self.declare_parameter('obstacle_z_l2', 1.175)
         # 是否把场景里的可动比赛用品也作为障碍发布（它们会被机器人推动）
         self.declare_parameter('publish_movable_objects', True)
         self.declare_parameter('obstacle_rate', 20.0)
@@ -64,6 +71,8 @@ class MujocoSimNode(Node):
         self.obstacle_l2_speed = float(gp('obstacle_l2_speed').value)
         self.obstacle_l2_orbit = float(gp('obstacle_l2_orbit_radius').value)
         self.obstacle_height = float(gp('obstacle_height').value)
+        self.obstacle_z_l1 = float(gp('obstacle_z_l1').value)
+        self.obstacle_z_l2 = float(gp('obstacle_z_l2').value)
         self.publish_movable_objects = bool(gp('publish_movable_objects').value)
         self.obstacle_rate = float(gp('obstacle_rate').value)
 
@@ -79,8 +88,8 @@ class MujocoSimNode(Node):
         # 动态障碍（mocap body，纯视觉，不参与物理）
         # 两个移动对手：L1 台面 (z=0.625) 与 L2 台面 (z=0.925)
         self.moving_obstacles: list[dict] = []
-        for name, kind, z in (('obstacle_l1', 'l1', 0.875),
-                              ('obstacle_l2', 'l2', 1.175)):
+        for name, kind, z in (('obstacle_l1', 'l1', self.obstacle_z_l1),
+                              ('obstacle_l2', 'l2', self.obstacle_z_l2)):
             body_id = mujoco.mj_name2id(
                 self.model, mujoco.mjtObj.mjOBJ_BODY, name)
             if body_id < 0:

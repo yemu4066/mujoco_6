@@ -88,11 +88,11 @@
              台面 z=0.875 < nav_node.obstacle_z_max(1.0) → 导航会感知到它。
          L2：绕原点环行，半径 0.85、台面 z=1.175 > 1.0 → 导航忽略（车够不着），
              但 Foxglove 里能看到，用于对照。 -->
-    <body name="obstacle_l1" mocap="true" pos="-2.2 -2.5 0.875">
+    <body name="obstacle_l1" mocap="true" pos="-2.2 -2.5 0.25">
       <geom name="obstacle_l1_geom" type="box" size="0.325 0.325 0.25"
             mass="5.0" rgba="1 0.55 0.10 0.85" contype="0" conaffinity="0" group="2" />
     </body>
-    <body name="obstacle_l2" mocap="true" pos="0.85 0 1.175">
+    <body name="obstacle_l2" mocap="true" pos="0.85 0 0.25">
       <geom name="obstacle_l2_geom" type="box" size="0.325 0.325 0.25"
             mass="5.0" rgba="1 0.20 0.60 0.85" contype="0" conaffinity="0" group="2" />
     </body>
