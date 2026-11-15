@@ -343,19 +343,18 @@ class Navigation:
         self._path = points
         self._kick_frames = 0
 
-        # ============================================================
-        # ★ 弯道限速再次注释（实验：完全不限速 + 加速度零代价）
-        # ============================================================
-        # self._build_speed_profile(points)
-        #
-        # try:
-        #     self.mpc.speed_profile = (
-        #         np.asarray(self.mpc.path_planner.s_samples, dtype=float),
-        #         np.asarray(self._path_vmax, dtype=float),
-        #     )
-        # except Exception:                      # noqa: BLE001
-        #     self.mpc.speed_profile = None
-        self.mpc.speed_profile = None
+        self._build_speed_profile(points)
+
+        # 把速度剖面交给 MPC：_stage_queries 按 v(s) 逐阶段积分生成参考点，
+        # 弯道处参考点自己慢下来（间距随 v 变化），MPC 为了不跑过头会主动
+        # 输出负 dv 提前刹车，而不是被恒定 4 m/s 的参考点拽着冲弯。
+        try:
+            self.mpc.speed_profile = (
+                np.asarray(self.mpc.path_planner.s_samples, dtype=float),
+                np.asarray(self._path_vmax, dtype=float),
+            )
+        except Exception:                      # noqa: BLE001
+            self.mpc.speed_profile = None
         self._phase = TRACK
         self._blocked = False
         self.last_error = ''
