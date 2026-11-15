@@ -220,6 +220,18 @@ class Navigation:
         #     0.54 + 0.46 = 1.00 m   ← 从中心算 1 m 内有障碍就重规划
         # 必须保持 < dynamic_inflate_radius(0.80)，否则 A* 绕完立刻又判挡路。
         self.block_threshold = 0.54
+        # ---- 动态障碍距离限速（离得越近越慢）----
+        # 用的是「车体外缘到障碍表面的净间隙」 gap = d(车中心,障碍点) - car_sweep_radius。
+        # 速度按制动距离公式给出：  v = sqrt(2·a·(gap − stop_gap))
+        #   gap <= stop_gap            → 0（刹停）
+        #   gap >= full_gap            → 不限制（由限速剖面决定）
+        # 参数按用户要求：0.4 m 刹停、2.0 m 开始减速。
+        # 注意 a=5.0 是为了在 2 m 处刚好能到 4 m/s（16 = 2·a·1.6），
+        # 它大于 dv_max=3.0 —— 这是**参考点限速**，不是硬约束，
+        # 物理刹不住时由 MPC 的 dv 硬约束兜底，表现为「追不上参考点」。
+        self.dyn_stop_gap = 0.40     # [m] 净间隙降到这个值 → 速度 0
+        self.dyn_full_gap = 2.00     # [m] 净间隙超过这个值 → 不限制
+        self.dyn_brake_a = 5.0       # [m/s²] 限速曲线用的等效减速度
         self.obstacle_clearance = 0.05       # 兼容旧字段，已不参与膨胀计算
 
         # ---- MPC ----
@@ -482,6 +494,9 @@ class Navigation:
         # 这是"车实际偏离规划路径多少"，和 MPC 代价里那个 lateral_err
         # （预测未来的偏差）不是一回事。外部可以读 nav.last_lateral 做告警/降速。
         self.last_lateral = self._lateral_error(x, y)
+
+        # ---- 动态障碍距离限速：离得越近参考点推进越慢 ----
+        self.mpc.dynamic_speed_cap = self._speed_cap_from_obstacles(x, y)
 
         # 记录 TRACK 阶段的车头：下次 set_goal 修正 old_alpha 参考系要用
         # （ALIGN 阶段车头会原地转，但 α 不会跟着更新）
@@ -759,6 +774,28 @@ class Navigation:
         self._manual_points = None
         self._manual_centers.clear()
         self._scan_dirty = True
+
+    def _speed_cap_from_obstacles(self, x: float, y: float) -> float | None:
+        """根据「车体外缘到最近障碍的净间隙」给出参考速度上限。
+
+        返回 None 表示没有障碍、不干预；返回 0 表示该刹停。
+        速度曲线用制动距离：v = sqrt(2·a·(gap − stop_gap))，
+        再夹到 [0, speed_wide]。
+        """
+        pts = self._all_obstacle_points()
+        if pts is None or len(pts) == 0:
+            return None
+
+        d = np.hypot(x - pts[:, 0], y - pts[:, 1])
+        # d 是「车中心 → 障碍表面」，减掉车体外接圆得到净间隙
+        gap = float(d.min()) - self.car_sweep_radius
+
+        if gap >= self.dyn_full_gap:
+            return None                       # 够远，不限制
+        if gap <= self.dyn_stop_gap:
+            return 0.0                        # 太近，刹停
+        v = math.sqrt(2.0 * self.dyn_brake_a * (gap - self.dyn_stop_gap))
+        return min(v, self.speed_wide)
 
     def _all_obstacle_points(self) -> np.ndarray | None:
         """感知障碍 + 手动障碍合并后的点集。"""

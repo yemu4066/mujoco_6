@@ -70,6 +70,7 @@ class AcadosMPCBase(ABC):
         self.use_stage_decay = True          # 待探测
         self._stage_decay_probed = False
         # 可视化用（只读，不参与控制）
+        self.dynamic_speed_cap = None    # 动态障碍限速（navigation 每帧设置）
         self.last_ref_points = None      # (N+1, 3) 参考点 (x, y, θ)
         self.last_pred_traj = None       # (M, 3)   MPC 预测轨迹 (x, y, θ)
         self.view_range = None           # 参考点视野 [m]；None = ref_speed×dt×n_horizon（7.0m）
@@ -154,6 +155,11 @@ class AcadosMPCBase(ABC):
             v_k = max(float(np.interp(s_curr, v_coord, vmax)), 0.2)
             if in_hold:
                 v_k = min(v_k, 0.10)
+            # ★ 动态障碍限速：由 navigation 每帧根据「车到最近障碍的净间隙」算好。
+            #   None 表示没有障碍，不干预。
+            cap = getattr(self, 'dynamic_speed_cap', None)
+            if cap is not None:
+                v_k = min(v_k, max(float(cap), 0.0))
             s_curr = min(s_curr + v_k * self.dt, s_max)
         return out
 
