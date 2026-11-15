@@ -327,6 +327,32 @@ class Navigation:
         except Exception:                      # noqa: BLE001
             pass
 
+        # ★ 重置 acados 的 warm start（x/u/pi/lam）。
+        #   SQP_RTI 用上一帧的解做线性化点。第二次及以后发目标时，求解器
+        #   内部还存着「上一个目标终点附近」的解 —— 新目标参考轨迹的位置
+        #   和朝向完全不同，前几帧在错误的线性化点展开会输出异常控制量，
+        #   表现就是「第二次及以后又回到过冲状态」。
+        #   reset 之后必须重新铺 x/u 初值，否则求解器从全零出发、首帧解出
+        #   接近零的控制量 → 车不动。alpha0 已在上面覆写，初值方向是对的。
+        try:
+            if hasattr(self.mpc.solver, 'reset'):
+                self.mpc.solver.reset()
+                x0_aug = np.array([
+                    float(start[0]), float(start[1]), float(start[2]),
+                    float(self.mpc.last_aug_state[0]),
+                    float(self.mpc.last_aug_state[1]),
+                    float(self.mpc.last_aug_state[2]),
+                ])
+                for k in range(self.mpc.n_horizon + 1):
+                    self.mpc.solver.set(k, "x", x0_aug)
+                for k in range(self.mpc.n_horizon):
+                    self.mpc.solver.set(k, "u", np.zeros(3))
+                print('[MPC] warm start 已重置并按当前状态铺初值', flush=True)
+            else:
+                print('[MPC] solver 没有 reset()，跳过 warm start 重置', flush=True)
+        except Exception as exc:               # noqa: BLE001
+            print(f'[MPC] warm start 重置失败（{exc}）', flush=True)
+
         self._goal = (float(x), float(y), float(yaw))
         self._path = points
         self._build_speed_profile(points)
