@@ -371,8 +371,12 @@ class AugmentedSwerveMPC(AcadosMPCBase):
         # 控制约束 [dv, dalpha, dw]
         ocp.constraints.idxbu = np.arange(3)
         # dw 同样锁 0：控制量也不产生角速度变化
-        ocp.constraints.lbu = np.array([-3.0, -4.0, 0.0])
-        ocp.constraints.ubu = np.array([3.0, 4.0, 0.0])
+        # dα 上限 4.0 → 6.0：与 MuJoCo 底盘的 steer_rate_limit=8.0 对齐。
+        # 原来 4.0 时 4 m/s 下 R_min = v/dα = 1.00 m，过不了 0.3~0.5 m 的急弯；
+        # 30° 转舵滞后 0.131 s，远大于回线时间常数 τ=0.046 s → 正弦画龙。
+        # 提到 6.0 后 R_min = 0.67 m、t_lag(30°) = 0.087 s。
+        ocp.constraints.lbu = np.array([-3.0, -6.0, 0.0])
+        ocp.constraints.ubu = np.array([3.0, 6.0, 0.0])
         ocp.constraints.x0 = np.zeros(6)
         assert isinstance(ocp.model.x,SX)
         pos_err = ocp.model.x[0:2] - ocp.model.p[0:2]
@@ -418,7 +422,10 @@ class AugmentedSwerveMPC(AcadosMPCBase):
         # 但 W[2] 本质是横向回线的「阻尼」：e_lat_dot ≈ v·e_ψ，
         # 惩罚 e_ψ 就是惩罚回线速度。实测切入角从 31.4° 掉到 7.0°，
         # 收敛距离从 0.55 m 涨到 2.45 m —— 车平行于路径平移，窄道撞墙。
-        ocp.cost.W = np.diag([2.0, 2.0, 0.2, 4.0, 0, 0, 0, 0.05, 0.2, 0.2])
+        # W[8] (dα) 0.2 → 0.05：原来打满舵一步代价 0.2×6²=7.2，
+        # 而方向歪 90° 才 0.2×1.57²=0.49 —— 优化器宁可歪 90° 也不打舵。
+        # 其余权重保持 fb29347 原版：位置 2.0 / 横向 4.0 / 方向 0.2。
+        ocp.cost.W = np.diag([2.0, 2.0, 0.2, 4.0, 0, 0, 0, 0.05, 0.05, 0.2])
         ocp.cost.W_e = np.diag([4.0, 4.0, 0.2, 4.0, 0.2, 0.2, 0.2])
 
     def update(self, x_current: np.ndarray) -> np.ndarray:

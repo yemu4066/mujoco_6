@@ -59,7 +59,7 @@ class Navigation:
                  smooth_radius: float = 0.35,
                  smooth_adaptive: float = 0.58,
                  speed_lookahead: float = 2.4,
-                 dalpha_max: float = 4.0,
+                 dalpha_max: float = 6.0,
                  dv_max: float = 3.0,) -> None:
         # ---- 地图 ----
         base, occupied = load_map(map_yaml)
