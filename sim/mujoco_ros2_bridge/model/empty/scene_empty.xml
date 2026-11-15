@@ -1,17 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- 空白测试场景：20×20 m 平地 + 主分支舵轮底盘，无任何场地几何。
 
-     用途：动态避障/跟踪算法的干净复现环境 —— 没有墙、坡、方块、移动对手。
+     用途：动态避障 / 跟踪算法的干净复现环境 —— 没有墙、坡、方块、移动对手。
      与 rc2027/scene_nav.xml 的差异：
-       · 删掉全部场地 mesh / geom
+       · 删掉全部场地 mesh / geom / nav_fence / obstacle_l1 / obstacle_l2
        · 底盘起点从 (4.75, -4.80) 移到 (0, 0)
        · 地面换成 20×20 平面
        · 保留灯光、三个相机、底盘、contact 排除、8 个舵轮 actuator
 
      配套地图：maps/empty_20x20.yaml（origin [-10,-10]，res 0.05）
-
-     用法见 sim/mujoco_ros2_bridge/README 或询问维护者。
-     （XML 注释里不能出现连续两个减号，所以这里不写完整命令行）
 -->
 <mujoco model="empty_arena">
   <compiler angle="radian" meshdir="meshes" autolimits="true" balanceinertia="true" />
@@ -84,30 +81,6 @@
         </body>
 
         <geom name="head_marker" type="box" size="0.05 0.2 0.01" pos="0.27 0 0.085" rgba="0 1 0 1" contype="0" conaffinity="0" mass="0"/>
-    </body>
-
-    <!-- 场地围栏补强：原碰撞层只有 100 mm 高，116 mm 的轮子能被顶过去。
-         这里叠一层 500 mm 高的不可见碰撞墙（视觉仍用原围栏 mesh）。 -->
-    <geom name="nav_fence_n" type="box" size="5.55 0.05 0.25" pos="0 5.525 0.275"
-          rgba="0 0 0 0" contype="1" conaffinity="1" group="1"/>
-    <geom name="nav_fence_s" type="box" size="5.55 0.05 0.25" pos="0 -5.525 0.275"
-          rgba="0 0 0 0" contype="1" conaffinity="1" group="1"/>
-    <geom name="nav_fence_e" type="box" size="0.05 5.55 0.25" pos="5.525 0 0.275"
-          rgba="0 0 0 0" contype="1" conaffinity="1" group="1"/>
-    <geom name="nav_fence_w" type="box" size="0.05 5.55 0.25" pos="-5.525 0 0.275"
-          rgba="0 0 0 0" contype="1" conaffinity="1" group="1"/>
-
-    <!-- 两个 650×650 的移动对手（mocap，仅视觉 + 真值发布，不参与物理碰撞）。
-         L1：对方半场（x<0）西侧走廊 + 北侧公共边缘，L 形折返，台面 z=0.625；
-         L2：中央公共区绕中央基座环行，台面 z=0.925。
-         导航侧完全不读这些 body，只读 mujoco_node 换算出的 ObstacleArray。 -->
-    <body name="obstacle_l1" mocap="true" pos="-2.2 -2.5 0.875">
-      <geom name="obstacle_l1_geom" type="box" size="0.325 0.325 0.25"
-            mass="5.0" rgba="1 0.55 0.10 0.85" contype="0" conaffinity="0" group="2" />
-    </body>
-    <body name="obstacle_l2" mocap="true" pos="0.85 0 1.175">
-      <geom name="obstacle_l2_geom" type="box" size="0.325 0.325 0.25"
-            mass="5.0" rgba="1 0.20 0.60 0.85" contype="0" conaffinity="0" group="2" />
     </body>
   </worldbody>
 
