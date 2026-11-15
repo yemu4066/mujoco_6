@@ -210,6 +210,12 @@ class Navigation:
         # 所以把膨胀放大，让 A* 主动绕远一些，给运动留出缓冲。
         # 0.80 m + 方块外接圆 0.46 m ⇒ 车中心离对方中心至少 1.26 m。
         self.dynamic_inflate_radius = 0.80   # [m]
+        # 触发重规划的距离（**从障碍表面算**，即到 _dynamic_points 的最近距离）。
+        # 换成从障碍几何中心算 = 它 + 障碍外接圆半径。
+        # 仿真的方块外接圆是 hypot(0.325,0.325)=0.46 m，所以：
+        #     0.54 + 0.46 = 1.00 m   ← 从中心算 1 m 内有障碍就重规划
+        # 必须保持 < dynamic_inflate_radius(0.80)，否则 A* 绕完立刻又判挡路。
+        self.block_threshold = 0.54
         self.obstacle_clearance = 0.05       # 兼容旧字段，已不参与膨胀计算
 
         # ---- MPC ----
@@ -846,7 +852,7 @@ class Navigation:
         #     膨胀 0.50 → 阈值 0.25
         #     膨胀 0.80 → 阈值 0.40
         #     膨胀 1.20 → 阈值 0.60
-        threshold = max(0.20, 0.5 * self.dynamic_inflate_radius)
+        threshold = self.block_threshold
         for p in pts:
             d = np.hypot(path[:, 0] - p[0], path[:, 1] - p[1]).min()
             if d < threshold:
