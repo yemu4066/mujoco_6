@@ -211,16 +211,16 @@ class Navigation:
         # 对手是**运动的**：膨胀太小，对方稍微一动就压上路径、立刻触发重规划，
         # 路径反复变化反而让车走不稳。放大后 A* 主动绕远，给运动留出缓冲。
         #
-        # 1.20 m + 方块外接圆 0.46 m ⇒ 车中心离对方中心至少 1.66 m。
-        # ⚠ 通道宽度 < 2 × 1.20 = 2.4 m 时 A* 可能无解。
+        # 1.40 m + 方块外接圆 0.46 m ⇒ 车中心离对方中心至少 1.86 m。
+        # ⚠ 通道宽度 < 2 × 1.40 = 2.8 m 时 A* 可能无解。
         #   空白场（20×20）没问题；换到窄场地把它调小到 0.80 左右。
-        self.dynamic_inflate_radius = 1.20   # [m]
+        self.dynamic_inflate_radius = 1.40   # [m]
         # 触发重规划的距离（**从障碍表面算**，即到 _dynamic_points 的最近距离）。
         # 换成从障碍几何中心算 = 它 + 障碍外接圆半径（仿真方块 0.46 m）。
-        #     0.90 + 0.46 = 1.36 m   ← 从中心算 1.36 m 内有障碍就重规划
-        # 必须保持 < dynamic_inflate_radius(1.20)，
+        #     1.10 + 0.46 = 1.56 m   ← 从中心算 1.56 m 内有障碍就重规划
+        # 必须保持 < dynamic_inflate_radius(1.40)，
         # 否则 A* 绕完立刻又判挡路 → 每 0.25 s 重规划一次 → 路径乱变。
-        self.block_threshold = 0.90
+        self.block_threshold = 1.10
         # ---- 动态障碍距离限速（离得越近越慢）----
         # 用的是「车体外缘到障碍表面的净间隙」 gap = d(车中心,障碍点) - car_sweep_radius。
         # 速度按制动距离公式给出：  v = sqrt(2·a·(gap − stop_gap))
@@ -497,7 +497,7 @@ class Navigation:
         self.last_lateral = self._lateral_error(x, y)
 
         # ---- 动态障碍距离限速：离得越近参考点推进越慢 ----
-        self.mpc.dynamic_speed_cap = self._speed_cap_from_obstacles(x, y)
+        self.mpc.dynamic_speed_cap = self._speed_cap_from_obstacles()
 
         # 记录 TRACK 阶段的车头：下次 set_goal 修正 old_alpha 参考系要用
         # （ALIGN 阶段车头会原地转，但 α 不会跟着更新）
@@ -776,20 +776,45 @@ class Navigation:
         self._manual_centers.clear()
         self._scan_dirty = True
 
-    def _speed_cap_from_obstacles(self, x: float, y: float) -> float | None:
-        """根据「车体外缘到最近障碍的净间隙」给出参考速度上限。
+    def _speed_cap_from_obstacles(self) -> float | None:
+        """根据「障碍到**当前规划路径**的最近净间隙」给出参考速度上限。
 
-        返回 None 表示没有障碍、不干预；返回 0 表示该刹停。
-        速度曲线用制动距离：v = sqrt(2·a·(gap − stop_gap))，
-        再夹到 [0, speed_wide]。
+        为什么用「障碍到路径」而不是「车到障碍」：
+            全向车贴着路径走，障碍可能就在旁边 1 m 处但**不在路上** ——
+            A* 判定没必要绕（block_threshold 更大），车也不该因为"路过"
+            就被减速拖住。用「车到障碍」会让这种情况误判成危险。
+            改成「障碍到路径」之后，两者语义一致：
+                dp < block_threshold      → 重规划（绕开）
+                dp 在 [stop_gap, full_gap] → 按制动曲线减速
+            A* 绕开之后 dp >= dynamic_inflate_radius > full_gap，
+            自然就不减速了。
+
+        返回 None 表示不干预；返回 0 表示该刹停。
+        曲线：v = sqrt(2·a·(gap − stop_gap))，夹到 [0, speed_wide]。
         """
         pts = self._all_obstacle_points()
         if pts is None or len(pts) == 0:
             return None
 
-        d = np.hypot(x - pts[:, 0], y - pts[:, 1])
-        # d 是「车中心 → 障碍表面」，减掉车体外接圆得到净间隙
-        gap = float(d.min()) - self.car_sweep_radius
+        end = self.mpc.path_planner
+        if len(end.x_path) == 0:
+            return None
+        path = np.column_stack([end.x_path, end.y_path])
+
+        # 只关心「还没走过」的那一段（和 _obstacle_blocks_path 一致）
+        if self._last_pose is not None and len(end.s_samples) == len(path):
+            s0 = end.get_nearest_s(self._last_pose[0], self._last_pose[1])
+            idx = int(np.searchsorted(end.s_samples, s0))
+            path = path[max(0, idx - 1):]
+        if len(path) == 0:
+            return None
+
+        # (M, K) 距离矩阵，取全局最小 —— M 是障碍点(几十)，K 是路径点(几百)
+        d2 = ((pts[:, None, :] - path[None, :, :]) ** 2).sum(-1)
+        dp = float(np.sqrt(d2.min()))
+
+        # dp 是「障碍表面 → 路径中心线」，减掉车体外接圆得到净间隙
+        gap = dp - self.car_sweep_radius
 
         if gap >= self.dyn_full_gap:
             return None                       # 够远，不限制
