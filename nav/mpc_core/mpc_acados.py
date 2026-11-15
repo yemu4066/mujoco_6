@@ -133,11 +133,15 @@ class AcadosMPCBase(ABC):
             reachable_floor = v_now - dv_lim * self.dt * k
             cap = max(target, reachable_floor)
             if self._vcap_dim == 3:
-                lb = np.array([-cap, -math.pi, 0.0])
-                ub = np.array([cap, math.pi, 0.0])
+                # 必须和 ocp.constraints.lbx/ubx 一致（±20π），
+                # 否则这里每帧覆盖会把它压回 ±π，前面的放宽等于白做。
+                a_lim = 20.0 * math.pi
+                lb = np.array([-cap, -a_lim, 0.0])
+                ub = np.array([cap, a_lim, 0.0])
             else:
-                lb = np.array([-1e9, -1e9, -1e9, -cap, -math.pi, 0.0])
-                ub = np.array([1e9, 1e9, 1e9, cap, math.pi, 0.0])
+                a_lim = 20.0 * math.pi
+                lb = np.array([-1e9, -1e9, -1e9, -cap, -a_lim, 0.0])
+                ub = np.array([1e9, 1e9, 1e9, cap, a_lim, 0.0])
             self.solver.set(k, "lbx", lb)
             self.solver.set(k, "ubx", ub)
         self._vcap_applied = True
@@ -401,8 +405,15 @@ class AugmentedSwerveMPC(AcadosMPCBase):
         # v 允许为负：车头锁死后，反向移动靠倒车实现，
         # 否则要求 alpha≈±π，正好卡在约束边界，求解器会退回零解。
         # （试过把 alpha 收到 ±π/2 来消掉 (v,α)/(-v,α+π) 的冗余解，效果不好，已回退）
-        ocp.constraints.lbx = np.array([-5.0, -np.pi, 0.0])
-        ocp.constraints.ubx = np.array([5.0, np.pi, 0.0])
+        # ★ alpha 的界放宽到 ±20π（≈±3600°），只作数值防爆，不再当物理约束。
+        #   卡在 ±π 时，alpha 走到 +π 附近（车头朝上、向下运动就是这个状态）
+        #   就只有一个方向能走，另一侧撞 ubx 墙 —— 这个「临界点」正是
+        #   「向下运动左转冲直线」的来源。放开后 alpha 连续累积，临界消失。
+        #   前提：_process_output 存的 last_aug_state[1] 必须**不归一化**，
+        #   否则每帧把 alpha 瞬移回 [−π,π]，反而制造跳变。
+        A_LIM = 20.0 * math.pi
+        ocp.constraints.lbx = np.array([-5.0, -A_LIM, 0.0])
+        ocp.constraints.ubx = np.array([5.0, A_LIM, 0.0])
         # 控制约束 [dv, dalpha, dw]
         ocp.constraints.idxbu = np.arange(3)
         # dw 同样锁 0：控制量也不产生角速度变化
@@ -479,6 +490,13 @@ class AugmentedSwerveMPC(AcadosMPCBase):
     def _process_output(self, u_0, x_1):
         # 提取预测的下一步状态作为当前的底盘指令
         v_next, alpha_next, vw_next = x_1[3:6]
+        # ★ 这里**绝对不要**对 alpha_next 做 atan2/归一化。
+        #   归一化会把 alpha 每帧瞬移回 [−π, π]，等于人为制造 ±π 跳变，
+        #   MPC 认为 alpha 突变（违反 dα 约束），轨迹直接乱掉 ——
+        #   这正是上一版「放宽界后 U 型弯全撞墙」的真正原因。
+        #   保持 alpha 连续累积，临界状态才会消失。
+        #   （发给底盘时在下面的 a_out 里仍会用 atan2 归一到 [−π, π]，
+        #     那是输出，不影响内部状态。）
         self.last_aug_state = np.array([v_next, alpha_next, vw_next])
 
         # ★ 规范化到 |alpha| <= 90°。
