@@ -180,11 +180,16 @@ class AcadosMPCBase(ABC):
             return s_start + self.ref_speed * self.dt * np.arange(N)
 
         s_max = float(s_path[-1])
+        # ★ vmax 是按 points 索引的，s_samples 是样条重采样后的，两者长度
+        #   不保证相等（np.interp 要求 xp/fp 等长，否则直接抛
+        #   "fp and xp are not of the same length" → nav_node 崩溃）。
+        #   这里把 vmax 的坐标统一摊到 [0, s_max]。
+        v_coord = np.linspace(0.0, s_max, len(vmax)) if s_max > 0 else np.zeros(len(vmax))
         out = np.empty(N, dtype=float)
         s_curr = float(np.clip(s_start, 0.0, s_max))
         for k in range(N):
             out[k] = s_curr
-            v_k = max(float(np.interp(s_curr, s_path, vmax)), 0.2)
+            v_k = max(float(np.interp(s_curr, v_coord, vmax)), 0.2)
             s_curr = min(s_curr + v_k * self.dt, s_max)
         return out
 
