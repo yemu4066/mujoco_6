@@ -176,7 +176,6 @@ class Navigation:
         # 路径上每点的限速（set_goal 时算）
         self._path_s: np.ndarray | None = None
         self._path_vmax: np.ndarray | None = None
-        self._path_kappa: np.ndarray | None = None
 
         # ---- 动态障碍（雷达）----
         # 动态避障总开关。默认关闭 —— 底盘还没接雷达时不会有任何数据，
@@ -336,19 +335,33 @@ class Navigation:
 
         self._goal = (float(x), float(y), float(yaw))
         self._path = points
-        self._build_speed_profile(points)
         self._kick_frames = 0
 
-        # 把速度剖面交给 MPC：_stage_queries 按 v(s) 逐阶段积分生成参考点，
-        # 弯道处参考点自己慢下来（间距 4cm → ~0.8cm），MPC 为了不跑过头
-        # 会主动输出负 dv 提前刹车，而不是被 4m/s 恒定参考点拽着冲弯。
-        try:
-            self.mpc.speed_profile = (
-                np.asarray(self.mpc.path_planner.s_samples, dtype=float),
-                np.asarray(self._path_vmax, dtype=float),
-            )
-        except Exception:                      # noqa: BLE001
-            self.mpc.speed_profile = None
+        # ============================================================
+        # ★★★ 限速模块已临时注释，用于对比「有/无弯道减速」的效果 ★★★
+        #
+        # 注释掉之后：
+        #   _path_vmax 保持 None → mpc.speed_profile = None
+        #   → _stage_queries 走 prof is None 分支：
+        #         s_start + ref_speed × dt × arange(N)
+        #   → 参考点恒以 4.0 m/s 等间距推进，弯道不再自动变密
+        #   → 结果：MPC 不再被"密集参考点"逼着减速，弯道会全速冲
+        #
+        # 恢复：取消下面两段的注释即可。
+        # ============================================================
+        # self._build_speed_profile(points)
+        #
+        # # 把速度剖面交给 MPC：_stage_queries 按 v(s) 逐阶段积分生成参考点，
+        # # 弯道处参考点自己慢下来（间距 4cm → ~0.8cm），MPC 为了不跑过头
+        # # 会主动输出负 dv 提前刹车，而不是被 4m/s 恒定参考点拽着冲弯。
+        # try:
+        #     self.mpc.speed_profile = (
+        #         np.asarray(self.mpc.path_planner.s_samples, dtype=float),
+        #         np.asarray(self._path_vmax, dtype=float),
+        #     )
+        # except Exception:                      # noqa: BLE001
+        #     self.mpc.speed_profile = None
+        self.mpc.speed_profile = None
         self._phase = TRACK
         self._blocked = False
         self.last_error = ''
@@ -451,7 +464,6 @@ class Navigation:
         self._track_yaw = float(yaw)
 
         # ---- 按横向余量调整参考速度 ----
-        self._apply_speed_limit()
 
         # ---- 阶段 ①：MPC 跟踪 ----
         u = self.mpc.update(np.array([x, y, yaw]))
@@ -519,7 +531,6 @@ class Navigation:
 
         # 曲率（曲率限速、折返判定都要用）
         kappa = self._curvature(points)
-        self._path_kappa = kappa          # 供 _apply_speed_limit 的 α 抑制判据用
 
         # ★ 已移除"窄路限速"（横向余量 → 速度的映射）和它的直道豁免。
         #   原来窄处降到 speed_floor、宽处跑满，是"离墙多近"在限制速度。
@@ -644,10 +655,6 @@ class Navigation:
             return 0.0
         nx, ny = -math.sin(ref[2]), math.cos(ref[2])   # 路径法向
         return float((x - ref[0]) * nx + (y - ref[1]) * ny)
-
-    def _apply_speed_limit(self) -> None:
-        """参考推进速度：恒定，不随路径曲率/包络变化。"""
-        self.mpc.ref_speed = float(self.ref_speed)
 
     # ================================================================
     # 动态障碍
