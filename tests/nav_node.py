@@ -89,10 +89,6 @@ class NavNode(Node):
         self.speed_label_pub = self.create_publisher(
             MarkerArray, '/speed_label', 10)
         # MPC 可视化：参考点 + 预测轨迹
-        # 可视化总开关：关掉后完全不构造/发布 Marker。注意即使 Foxglove
-        # 没订阅，rclpy 的 publish() 仍会在 Python 侧把消息构造出来，
-        # 所以必须在这里拦住才能真正排除可视化的开销。
-        self.enable_viz = False
         self.ref_pub = self.create_publisher(MarkerArray, '/mpc_ref', 10)
         self.pred_pub = self.create_publisher(MarkerArray, '/mpc_pred', 10)
 
@@ -254,8 +250,6 @@ class NavNode(Node):
 
     def _publish_mpc_viz(self) -> None:
         """把 MPC 这帧用的参考点和预测轨迹画出来。只读，不参与控制。"""
-        if not self.enable_viz:
-            return
         mpc = self.nav.mpc
         now = self.get_clock().now().to_msg()
 
