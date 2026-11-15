@@ -70,9 +70,9 @@ def generate_launch_description() -> LaunchDescription:
                 {
                     'scene': ParameterValue(scene, value_type=str),
                     'use_viewer': ParameterValue(use_viewer, value_type=bool),
-                    # 空白场没有台面，两个对手的方块直接贴地。
-                    # rc2027 的默认值是 0.875 / 1.175（站在台面上），
-                    # 不覆盖就会悬在空中。
+                    # 空白场没有台面，对手方块直接贴地（rc2027 默认是
+                    # 0.875/1.175，站在台面上，不覆盖会悬空）。
+                    # 场景里只有 obstacle_l1，l2 的参数留着无害（不会生效）。
                     'obstacle_z_l1': 0.25,
                     'obstacle_z_l2': 0.25,
                 },
