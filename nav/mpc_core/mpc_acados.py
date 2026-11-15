@@ -132,16 +132,12 @@ class AcadosMPCBase(ABC):
             # 所以上限不能低于这个值，否则约束物理不可达。
             reachable_floor = v_now - dv_lim * self.dt * k
             cap = max(target, reachable_floor)
-            # ★ alpha 的界必须和 ocp.constraints.lbx/ubx 保持一致（±10π）。
-            #   这里每帧都会覆盖 stage 1..n_horizon 的 lbx/ubx，如果还写 ±π，
-            #   就会把编译期放宽的界重新压回 ±π，前面那处修改等于白做。
-            a_lim = 10.0 * math.pi
             if self._vcap_dim == 3:
-                lb = np.array([-cap, -a_lim, 0.0])
-                ub = np.array([cap, a_lim, 0.0])
+                lb = np.array([-cap, -math.pi, 0.0])
+                ub = np.array([cap, math.pi, 0.0])
             else:
-                lb = np.array([-1e9, -1e9, -1e9, -cap, -a_lim, 0.0])
-                ub = np.array([1e9, 1e9, 1e9, cap, a_lim, 0.0])
+                lb = np.array([-1e9, -1e9, -1e9, -cap, -math.pi, 0.0])
+                ub = np.array([1e9, 1e9, 1e9, cap, math.pi, 0.0])
             self.solver.set(k, "lbx", lb)
             self.solver.set(k, "ubx", ub)
         self._vcap_applied = True
@@ -405,19 +401,8 @@ class AugmentedSwerveMPC(AcadosMPCBase):
         # v 允许为负：车头锁死后，反向移动靠倒车实现，
         # 否则要求 alpha≈±π，正好卡在约束边界，求解器会退回零解。
         # （试过把 alpha 收到 ±π/2 来消掉 (v,α)/(-v,α+π) 的冗余解，效果不好，已回退）
-        # ★ alpha 的界从 ±π 放宽到 ±10π。
-        #   alpha 的物理含义是「运动方向 − 车头」，本质是 mod 2π 的量。
-        #   卡在 ±π 时，alpha 一旦停在 +π（或 −π）附近，就只有「减小」
-        #   方向能走，「增大」方向直接撞 ubx 墙 —— 这就是「向上运动左转
-        #   正常、向下运动左转直接冲直线」的不对称来源（向下时 alpha≈π，
-        #   正坐在边界上；数学等价解 210° ≡ −150° 需要绕一整圈，
-        #   dα≤6.0 要 0.96 s，早就撞墙了）。
-        #   安全性：heading_err 用 atan2(sin,cos)，对 2π 周期免疫；
-        #   _process_output 里会归一到 [−π, π] 再发给底盘；
-        #   swerve_solver 的 wrap_to_near 同样按最近等价角处理。
-        #   所以放宽界不改变物理行为，只是解锁了「绕远路」这个自由度。
-        ocp.constraints.lbx = np.array([-5.0, -10.0 * np.pi, 0.0])
-        ocp.constraints.ubx = np.array([5.0, 10.0 * np.pi, 0.0])
+        ocp.constraints.lbx = np.array([-5.0, -np.pi, 0.0])
+        ocp.constraints.ubx = np.array([5.0, np.pi, 0.0])
         # 控制约束 [dv, dalpha, dw]
         ocp.constraints.idxbu = np.arange(3)
         # dw 同样锁 0：控制量也不产生角速度变化
@@ -494,10 +479,7 @@ class AugmentedSwerveMPC(AcadosMPCBase):
     def _process_output(self, u_0, x_1):
         # 提取预测的下一步状态作为当前的底盘指令
         v_next, alpha_next, vw_next = x_1[3:6]
-        # 存回 last_aug_state 时把 alpha 归一到 [−π, π]：保证下一帧初值
-        # x0[4] 始终落在“真实轮角”的等价区间里，避免多圈累积。
-        alpha_store = math.atan2(math.sin(alpha_next), math.cos(alpha_next))
-        self.last_aug_state = np.array([v_next, alpha_store, vw_next])
+        self.last_aug_state = np.array([v_next, alpha_next, vw_next])
 
         # ★ 规范化到 |alpha| <= 90°。
         #   运动学上 (v, α) 与 (−v, α∓180°) 完全等价（速度矢量相同），
