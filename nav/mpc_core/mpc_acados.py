@@ -421,8 +421,11 @@ class AugmentedSwerveMPC(AcadosMPCBase):
         # 原来 4.0 时 4 m/s 下 R_min = v/dα = 1.00 m，过不了 0.3~0.5 m 的急弯；
         # 30° 转舵滞后 0.131 s，远大于回线时间常数 τ=0.046 s → 正弦画龙。
         # 提到 6.0 后 R_min = 0.67 m、t_lag(30°) = 0.087 s。
-        ocp.constraints.lbu = np.array([-3.0, -6.0, 0.0])
-        ocp.constraints.ubu = np.array([3.0, 6.0, 0.0])
+        # dα ±6.0 → ±8.0，和仿真 steer_rate_limit=8.0 对齐。
+        # t_lag(30°) 从 0.087 s 降到 0.065 s，对 tau=0.096 s 的
+        # 稳定余量从 1.10 涨到 1.47；R_min = v/dα 同时降 25%。
+        ocp.constraints.lbu = np.array([-3.0, -8.0, 0.0])
+        ocp.constraints.ubu = np.array([3.0, 8.0, 0.0])
         ocp.constraints.x0 = np.zeros(6)
         assert isinstance(ocp.model.x,SX)
         pos_err = ocp.model.x[0:2] - ocp.model.p[0:2]
