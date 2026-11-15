@@ -312,17 +312,14 @@ class Navigation:
                 #   触发「切入角 37.7° → 滞后 0.110 s > τ 0.091 s → 过冲 →
                 #   越修越偏」的雪球。归零后每次出发都和第 1 次一样从静止
                 #   平滑加速。alpha0 仍覆写（cos(Δα)=1，v=0 不会锁死）。
-                # ★ old_alpha 的参考系要换算。
-                #   last_aug_state[1] 是「运动方向 − 车头」，记录于上一次
-                #   TRACK 的最后一帧；而到达后 ALIGN 阶段原地转了 Δyaw，
-                #   α 并不会更新（ALIGN 分支不调 mpc.update）。
-                #   直接把旧 α 和新车头下的 alpha0 相减没有物理意义。
-                #   先换成绝对运动方向，再减去当前车头：
-                #       old_alpha = wrap(last_alpha + (track_yaw − 当前车头))
-                track_yaw = getattr(self, '_track_yaw', None)
+                # ★ 参考系换算已按要求注释掉，先验证「不修正」的表现。
+                #   原来这里是：old_alpha = wrap(last_alpha + (track_yaw − 车头))
+                #   但第一次 _track_yaw 为 None 不修正、之后修正，
+                #   就等于又造了一个「只有第一次和后面不一样」的分叉。
+                # track_yaw = getattr(self, '_track_yaw', None)
                 old_alpha = float(self.mpc.last_aug_state[1])
-                if track_yaw is not None:
-                    old_alpha = wrap_angle(old_alpha + (track_yaw - float(start[2])))
+                # if track_yaw is not None:
+                #     old_alpha = wrap_angle(old_alpha + (track_yaw - float(start[2])))
                 self._align_hold_time = min(
                     abs(wrap_angle(alpha0 - old_alpha)) / 6.0, 0.30)
                 self._goal_start_time = time.monotonic()
