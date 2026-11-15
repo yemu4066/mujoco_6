@@ -49,10 +49,7 @@ class Navigation:
                  cost_weight: float = 2.0,
                  ref_speed: float = 4.0,
                  mpc_dt: float = 0.01,
-                 # 175 → 250：视野 = v·dt·N，低速时视野涨 43%
-                 # （1.0 m/s 下 1.75 m → 2.50 m）。n_horizon 是最硬的
-                 # 「看得多远」杠杆，权重改不动的东西它能改。
-                 mpc_horizon: int = 250,
+                 mpc_horizon: int = 175,
                  v_max: float = 5.0,
                  goal_tolerance: float = 0.05,
                  rotate_tolerance: float = 0.05,
@@ -62,10 +59,7 @@ class Navigation:
                  smooth_radius: float = 0.35,
                  smooth_adaptive: float = 0.58,
                  speed_lookahead: float = 2.4,
-                 # 6.0 → 8.0：和仿真 steer_rate_limit=8.0 对齐。
-                 # t_lag(30°) = 0.524/8.0 = 0.065 s（原 0.087），
-                 # 对 tau=0.096 s 的稳定余量从 1.10 涨到 1.47。
-                 dalpha_max: float = 8.0,
+                 dalpha_max: float = 6.0,
                  dv_max: float = 3.0,) -> None:
         # ---- 地图 ----
         base, occupied = load_map(map_yaml)
@@ -327,7 +321,7 @@ class Navigation:
                 # if track_yaw is not None:
                 #     old_alpha = wrap_angle(old_alpha + (track_yaw - float(start[2])))
                 self._align_hold_time = min(
-                    abs(wrap_angle(alpha0 - old_alpha)) / 8.0, 0.30)
+                    abs(wrap_angle(alpha0 - old_alpha)) / 6.0, 0.30)
                 self._goal_start_time = time.monotonic()
                 self.mpc.last_aug_state = np.array(
                     [0.0, alpha0, 0.0], dtype=np.float64)
