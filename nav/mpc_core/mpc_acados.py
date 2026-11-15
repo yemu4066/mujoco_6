@@ -476,14 +476,6 @@ class AugmentedSwerveMPC(AcadosMPCBase):
     def _process_output(self, u_0, x_1):
         # 提取预测的下一步状态作为当前的底盘指令
         v_next, alpha_next, vw_next = x_1[3:6]
-
-        # ★ alpha 必须归一化到 [-π, π] 后再存回 last_aug_state。
-        #   alpha 的约束是 lbx/ubx = ±π，而 x_1[4] 是连续积分出来的，
-        #   连续转弯时可能累积到 ±2π 以外。下一帧它会被当作初值
-        #   x_current[4] 传给求解器 —— 初值越界会被钳位或直接算歪，
-        #   表现就是「后几次导航过弯不跟线」。
-        #   归一化在运动学上无损：(v, α) 与 (v, α∓2π) 完全等价。
-        alpha_next = math.atan2(math.sin(alpha_next), math.cos(alpha_next))
         self.last_aug_state = np.array([v_next, alpha_next, vw_next])
 
         # ★ 规范化到 |alpha| <= 90°。
