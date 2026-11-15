@@ -222,6 +222,7 @@ class Navigation:
         self.kick_speed = 0.15             # 脱困速度 [m/s]
         self.last_error = ''        # 最近一次 set_goal 失败的原因
         # 起步对齐门控（只压 v_cap，不动 ref_speed）
+        self.enable_start_gate = False   # 起步门控总开关（先关掉验证基线）
         self._has_received_goal = False
         self._align_hold_time = 0.0
         self._goal_start_time = 0.0
@@ -410,7 +411,10 @@ class Navigation:
         # ---- 起步对齐门控：只压 v_cap，不动 ref_speed ----
         # 对齐期 0.15 m/s（轮子转正，位移 < 8 cm），之后 0.3 s 线性放开。
         dt_goal = time.monotonic() - self._goal_start_time
-        if dt_goal < self._align_hold_time:
+        # 门控总开关：关掉后 v_cap 完全不受限，用来验证 fb29347 基线
+        if not self.enable_start_gate:
+            self.mpc.v_cap_extra = None
+        elif dt_goal < self._align_hold_time:
             self.mpc.v_cap_extra = 0.15
         elif dt_goal < self._align_hold_time + 0.30:
             ratio = (dt_goal - self._align_hold_time) / 0.30
