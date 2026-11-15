@@ -191,7 +191,9 @@ class Navigation:
         # update() 里才会做「障碍挡路 → 重规划」。
         # 数据源：真机是 LaserScan；仿真是 mujoco_node 发布的 /obstacles
         # （两个 mocap 对手），由 nav_node._on_obstacles 转成世界坐标点喂进来。
-        self.enable_dynamic_obstacles = False
+        # ★ 动态避障已打开。关着时 set_obstacle_points / set_scan /
+        #   add_manual_obstacle 全部直接 return，动态障碍层永远是空的。
+        self.enable_dynamic_obstacles = True
         self._dynamic_points: np.ndarray | None = None   # (N, 2) 世界坐标
         # 调试层：手动加的障碍（Foxglove 点选）。和 _dynamic_points 分开存，
         # 因为 set_scan / set_obstacle_points 是**全量替换**，会把手动加的冲掉。
