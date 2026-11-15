@@ -28,7 +28,7 @@ import numpy as np
 import rclpy
 from geometry_msgs.msg import Point, PointStamped, PoseStamped, Twist
 from std_msgs.msg import Empty, Float32MultiArray
-from visualization_msgs.msg import ColorRGBA, Marker, MarkerArray
+from visualization_msgs.msg import Marker, MarkerArray
 from nav_msgs.msg import Odometry, OccupancyGrid, Path
 from sensor_msgs.msg import LaserScan
 from rclpy.node import Node
@@ -256,37 +256,29 @@ class NavNode(Node):
         # ① 参考点：小球，越靠后越大（颜色由蓝到青，表示"时间上越远"）
         ref = getattr(mpc, 'last_ref_points', None)
         if ref is not None:
-            # ★ 用单个 Marker(POINTS) 承载全部参考点，而不是 176 个 SPHERE。
-            #   原来每 5 Hz 创建 176 个 Marker 对象（每秒 880 个），每个带
-            #   Header/Pose/Scale/Color 等 30+ 字段 —— Python 小对象持续分配，
-            #   堆越涨越大、GC 越来越频繁，控制循环被越拖越慢。这正是
-            #   「跑得越久、后面几次越差」的一个真实来源。
-            #   改成一个 POINTS Marker + points/colors 数组，开销降到 1/176。
-            n = len(ref)
             arr = MarkerArray()
-            m = Marker()
-            m.header.frame_id = 'map'
-            m.header.stamp = now
-            m.ns = 'mpc_ref'
-            m.id = 0
-            m.type = Marker.POINTS
-            m.action = Marker.ADD
-            m.pose.orientation.w = 1.0
-            m.scale.x = m.scale.y = 0.05          # 点大小
+            n = len(ref)
             for k in range(n):
-                pt = Point()
-                pt.x = float(ref[k, 0])
-                pt.y = float(ref[k, 1])
-                pt.z = 0.05
-                m.points.append(pt)
+                x, y = float(ref[k, 0]), float(ref[k, 1])
+                m = Marker()
+                m.header.frame_id = 'map'
+                m.header.stamp = now
+                m.ns = 'mpc_ref'
+                m.id = k
+                m.type = Marker.SPHERE
+                m.action = Marker.ADD
+                m.pose.position.x = x
+                m.pose.position.y = y
+                m.pose.position.z = 0.05
+                m.pose.orientation.w = 1.0
+                # 起点小、终点略大，便于看出方向
                 frac = k / max(n - 1, 1)
-                c = ColorRGBA()
-                c.r = 0.1
-                c.g = 0.6 + 0.4 * frac
-                c.b = 1.0 - 0.3 * frac
-                c.a = 0.85
-                m.colors.append(c)
-            arr.markers.append(m)
+                m.scale.x = m.scale.y = m.scale.z = 0.02 + 0.02 * frac
+                m.color.r = 0.1
+                m.color.g = 0.6 + 0.4 * frac
+                m.color.b = 1.0 - 0.3 * frac
+                m.color.a = 0.85
+                arr.markers.append(m)
             self.ref_pub.publish(arr)
 
         # ② 预测轨迹：一条橙色折线，直接看 MPC 想怎么走
