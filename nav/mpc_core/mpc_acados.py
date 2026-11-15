@@ -229,6 +229,21 @@ class AcadosMPCBase(ABC):
             ref_p = np.column_stack([ref_states_all[:, 0:3], -sin_t, cos_t])  # (n+1, 5)
             self.last_ref_points = ref_states_all.copy()
 
+            # 诊断：对比「第一次设点」和「第二次设点」传入 MPC 的参考点参数
+            self._ref_log_n = getattr(self, '_ref_log_n', 0) + 1
+            if self._ref_log_n % 50 == 1:
+                sp = getattr(self, 'speed_profile', None)
+                print(
+                    f'[REF] s_start={s_start:.3f} s_end={s_queries[-1]:.3f} '
+                    f'视野={s_queries[-1]-s_queries[0]:.3f} '
+                    f'ref0=({ref_states_all[0,0]:+.3f},{ref_states_all[0,1]:+.3f},'
+                    f'{np.degrees(ref_states_all[0,2]):+.1f}deg) '
+                    f'refN=({ref_states_all[-1,0]:+.3f},{ref_states_all[-1,1]:+.3f},'
+                    f'{np.degrees(ref_states_all[-1,2]):+.1f}deg) '
+                    f'prof={"有" if sp is not None else "无"}'
+                    f'(len={len(sp[1]) if sp is not None else 0})',
+                    flush=True)
+
             [self.solver.set(k, "p", ref_p[k]) for k in range(self.n_horizon)]
             self.solver.set(self.n_horizon, "p", ref_p[-1])
         else:
