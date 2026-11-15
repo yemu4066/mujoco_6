@@ -417,6 +417,12 @@ class Navigation:
         else:
             self.mpc.v_cap_extra = None
 
+        self._gate_n = getattr(self, '_gate_n', 0) + 1
+        if self._gate_n % 50 == 0:
+            print(f'[GATE] dt={dt_goal:.3f}s hold={self._align_hold_time:.3f}s '
+                  f'extra={self.mpc.v_cap_extra} ref_speed={self.mpc.ref_speed:.3f}',
+                  flush=True)
+
         # ---- 阶段 ①：MPC 跟踪 ----
         u = self.mpc.update(np.array([x, y, yaw]))
         vx, vy, wz = float(u[0]), float(u[1]), float(u[2])
