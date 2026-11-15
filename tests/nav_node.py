@@ -107,6 +107,7 @@ class NavNode(Node):
                                  self._on_debug_clear, 10)
 
         self.pose = None
+        self._arrived_logged = False
         self._scan_logged = False
         self._has_scan = False
         self.obstacle_z_max = 1.0    # 高于这个高度的障碍忽略（够不着）
@@ -400,7 +401,12 @@ class NavNode(Node):
         t = Twist()
         if cmd is not None:
             t.linear.x, t.linear.y, t.angular.z = cmd
-        else:
+            self._arrived_logged = False
+        elif not self._arrived_logged:
+            # ARRIVED 阶段 update() 每帧都返回 None，这里只在第一次打印。
+            # 否则 odom 100 Hz 会让「到达」每秒刷 100 行日志，到达后等待
+            # 换目标的那几秒节点一直在做 IO，回调队列被拖慢，下次起步变钝。
+            self._arrived_logged = True
             self.get_logger().info(
                 f'到达 ({self.pose[0]:.2f},{self.pose[1]:.2f}) '
                 f'yaw {math.degrees(self.pose[2]):+.1f}°')

@@ -312,7 +312,17 @@ class Navigation:
                 #   触发「切入角 37.7° → 滞后 0.110 s > τ 0.091 s → 过冲 →
                 #   越修越偏」的雪球。归零后每次出发都和第 1 次一样从静止
                 #   平滑加速。alpha0 仍覆写（cos(Δα)=1，v=0 不会锁死）。
+                # ★ old_alpha 的参考系要换算。
+                #   last_aug_state[1] 是「运动方向 − 车头」，记录于上一次
+                #   TRACK 的最后一帧；而到达后 ALIGN 阶段原地转了 Δyaw，
+                #   α 并不会更新（ALIGN 分支不调 mpc.update）。
+                #   直接把旧 α 和新车头下的 alpha0 相减没有物理意义。
+                #   先换成绝对运动方向，再减去当前车头：
+                #       old_alpha = wrap(last_alpha + (track_yaw − 当前车头))
+                track_yaw = getattr(self, '_track_yaw', None)
                 old_alpha = float(self.mpc.last_aug_state[1])
+                if track_yaw is not None:
+                    old_alpha = wrap_angle(old_alpha + (track_yaw - float(start[2])))
                 self._align_hold_time = min(
                     abs(wrap_angle(alpha0 - old_alpha)) / 6.0, 0.30)
                 self._goal_start_time = time.monotonic()
@@ -330,6 +340,7 @@ class Navigation:
         self._goal = (float(x), float(y), float(yaw))
         self._path = points
         self._build_speed_profile(points)
+        self._kick_frames = 0
 
         # 把速度剖面交给 MPC：_stage_queries 按 v(s) 逐阶段积分生成参考点，
         # 弯道处参考点自己慢下来（间距 4cm → ~0.8cm），MPC 为了不跑过头
@@ -347,6 +358,29 @@ class Navigation:
         self._stuck_frames = 0
         self._anchor = None
         self._last_replan = time.time()
+
+        # ★ 空跑几次 mpc.update()，让 SQP_RTI 用「新参考轨迹」迭代几轮，
+        #   冲掉上一个目标残留的解。
+        #   SQP_RTI 用上一帧的解做线性化点；第二次及以后发目标时求解器
+        #   内部还是「上一个目标终点附近」的解，新目标的参考轨迹位置和
+        #   朝向完全不同，前几帧会在错误的线性化点展开，输出异常控制量
+        #   → 起步冲出、整条路线进入过冲。
+        #   这里不依赖 solver.reset()（各 acados 版本行为不一），也不把
+        #   x/u 全铺成当前位姿（那等于告诉 RTI「车停原地」，而参考点已
+        #   延伸到 7 m 外，首帧仍会输出大控制量），而是让 RTI 自己用正确
+        #   的参考多迭代几次。临时关 startup_hold，跑完把状态恢复回去。
+        try:
+            hold_saved = getattr(self.mpc, 'startup_hold', None)
+            state_saved = np.array(self.mpc.last_aug_state, dtype=float, copy=True)
+            self.mpc.startup_hold = None
+            p0 = np.array([float(start[0]), float(start[1]), float(start[2])])
+            for _ in range(5):
+                self.mpc.update(p0)
+            self.mpc.last_aug_state = state_saved
+            self.mpc.startup_hold = hold_saved
+        except Exception as exc:               # noqa: BLE001
+            print(f'[MPC] warm start 预热跳过（{exc}）', flush=True)
+
         return True
 
     def update(self, x: float, y: float, yaw: float):
@@ -414,6 +448,10 @@ class Navigation:
         # 这是"车实际偏离规划路径多少"，和 MPC 代价里那个 lateral_err
         # （预测未来的偏差）不是一回事。外部可以读 nav.last_lateral 做告警/降速。
         self.last_lateral = self._lateral_error(x, y)
+
+        # 记录 TRACK 阶段的车头：下次 set_goal 修正 old_alpha 参考系要用
+        # （ALIGN 阶段车头会原地转，但 α 不会跟着更新）
+        self._track_yaw = float(yaw)
 
         # ---- 按横向余量调整参考速度 ----
         self._apply_speed_limit()
