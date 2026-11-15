@@ -72,7 +72,6 @@ class AcadosMPCBase(ABC):
         self._vcap_dim = None
         # 规划层可用的 |dv| 上限，用来把 v_cap 逐 step 放开
         self.dv_max_spec = 3.0
-        self.view_min = 3.0             # 参考点最小视野 [m]，防止降速时视野塌缩
         self.use_stage_decay = True          # 待探测
         self._stage_decay_probed = False
         # 可视化用（只读，不参与控制）
@@ -199,24 +198,13 @@ class AcadosMPCBase(ABC):
             t0, hold_time = hold
             in_hold = hold_time > 0.0 and (time.monotonic() - t0) < hold_time
 
-        # ★ 视野下限：s += v·dt 意味着「视野 = v·dt·N」。
-        #   弯道速度降到 0.8 时视野只剩 1.41 m —— MPC 看不到出弯，
-        #   只能到了才转，反而贴不住线。给 v_k 加一个下限，
-        #   保证至少能看到 view_min 米：
-        #       v_floor = view_min / (dt·N)
-        #   这会把弯道速度托到 ~1.7 m/s（R_min = 1.7/6.0 = 0.28 m），
-        #   对 R>=0.30 的弯仍然够用，同时视野保住 3 m。
-        view_min = float(getattr(self, 'view_min', 3.0))
-        v_floor = view_min / (self.dt * self.n_horizon) if self.dt > 0 else 0.0
-
         out = np.empty(N, dtype=float)
         s_curr = float(np.clip(s_start, 0.0, s_max))
         for k in range(N):
             out[k] = s_curr
             v_k = max(float(np.interp(s_curr, v_coord, vmax)), 0.2)
-            v_k = max(v_k, v_floor)          # 保住最小视野
             if in_hold:
-                v_k = min(v_k, 0.10)         # 起步对齐期优先
+                v_k = min(v_k, 0.10)
             s_curr = min(s_curr + v_k * self.dt, s_max)
         return out
 
