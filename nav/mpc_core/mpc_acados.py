@@ -128,6 +128,15 @@ class AcadosMPCBase(ABC):
         #   正确做法：第 k 步的上限 = min(v_cap, v_now + dv_lim·dt·k)。
         target = float(ub3[0])
         # 到 n_horizon（不含）：终端 stage 用 lbx_e/ubx_e，没有 lbx/ubx
+        #
+        # ★ 只在 v_now 变化时才重设。v_cap 恒为 ref_speed×1.2=4.8、
+        #   cap_k 一路也是 4.8；无条件每帧重设就是 174 stage × 2 次 C 调用
+        #   （34800 次/秒），纯无效开销，会把 100 Hz 控制循环拖慢，
+        #   表现为轨迹抖动/不跟路径。
+        cache = getattr(self, '_vcap_cache', None)
+        if cache is not None and abs(cache[0] - v_now) < 1e-3:
+            return
+        self._vcap_cache = (v_now, target)
         for k in range(1, self.n_horizon):
             # 第 k 步 v 最低只能降到 v_now − dv·dt·k（受 dv 约束），
             # 所以上限不能低于这个值，否则约束物理不可达。
