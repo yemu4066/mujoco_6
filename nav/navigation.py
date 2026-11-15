@@ -203,7 +203,14 @@ class Navigation:
         self._last_replan = 0.0
         self.replan_interval = 0.4        # 最快重规划间隔 [s]
         self.blocked_retry_interval = 0.6 # 被堵死时多久重试一次 [s]
-        self.obstacle_clearance = 0.05    # 动态障碍额外余量 [m]
+        # 动态障碍的膨胀半径（A* 会绕开这么远）。
+        # 原来 = inscribed_radius(0.45) + obstacle_clearance(0.05) = 0.50 m。
+        # 但对手是**运动的**：按 0.50 m 规划出来的路径，对方稍微一动就压上来，
+        # 立刻触发重规划 —— 路径反复变化反而让车走不稳。
+        # 所以把膨胀放大，让 A* 主动绕远一些，给运动留出缓冲。
+        # 0.80 m + 方块外接圆 0.46 m ⇒ 车中心离对方中心至少 1.26 m。
+        self.dynamic_inflate_radius = 0.80   # [m]
+        self.obstacle_clearance = 0.05       # 兼容旧字段，已不参与膨胀计算
 
         # ---- MPC ----
         self.mpc = AugmentedSwerveMPC(dt=mpc_dt, n_horizon=mpc_horizon)
@@ -760,8 +767,9 @@ class Navigation:
         spec = self.costmap.spec
         res = spec.resolution
         height, width = cost.shape
-        radius = self._inscribed_cells + max(
-            0, int(round(self.obstacle_clearance / res)))
+        # 膨胀半径直接由 dynamic_inflate_radius 决定（不再拆成
+        # inscribed + clearance，那样两个字段各改一半很容易算错）。
+        radius = max(1, int(round(self.dynamic_inflate_radius / res)))
 
         # 世界坐标 → 栅格索引
         i = np.round((pts[:, 0] - spec.origin_x) / res).astype(np.int64)
@@ -816,16 +824,16 @@ class Navigation:
         # 所以"采样点到路径的最短距离" = "障碍边缘到路径的间隙"，
         # 注意它**没有方向性**：正前方和侧方一样算。
         #
-        # _planning_cost() 里动态障碍的膨胀半径是
-        #     radius = _inscribed_cells + obstacle_clearance/res
-        #            = 9 + 1 = 10 格 = 0.50 m
-        # 也就是说 A* 规划出来的路径，离每个障碍边缘至少 0.50 m。
+        # _planning_cost() 里动态障碍的膨胀半径 = dynamic_inflate_radius
+        # （默认 0.80 m），即 A* 规划出来的路径，离每个障碍边缘至少那么远。
         #
-        # 原来阈值取 inscribed*1.5 = 0.645 m > 0.50 —— A* 再怎么绕都够不到，
-        # 于是每 0.4 s 判一次"挡路"、重规划一次，路径无限变化 → 车走直线也在摆。
-        # 取 0.45 m（比 0.50 小 5 cm，留出栅格量化余量）才能真正区分
-        # "绕开了"和"障碍压过来了"。
-        threshold = 0.45
+        # 判定阈值必须**小于**膨胀半径，否则 A* 再怎么绕都够不到阈值，
+        # 于是每次都判"挡路"、每 0.4 s 重规划一次 → 路径无限变化 → 车在摆。
+        # 这里取膨胀半径的一半（至少 0.20 m），留足栅格量化余量：
+        #     膨胀 0.50 → 阈值 0.25
+        #     膨胀 0.80 → 阈值 0.40
+        #     膨胀 1.20 → 阈值 0.60
+        threshold = max(0.20, 0.5 * self.dynamic_inflate_radius)
         for p in pts:
             d = np.hypot(path[:, 0] - p[0], path[:, 1] - p[1]).min()
             if d < threshold:
