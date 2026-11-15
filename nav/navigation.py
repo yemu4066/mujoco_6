@@ -305,8 +305,25 @@ class Navigation:
                 seg = points[1] - points[0]
                 path_heading = math.atan2(float(seg[1]), float(seg[0]))
                 alpha0 = wrap_angle(path_heading - float(start[2]))
+
+                # ① v 归零：原来保留 v_old。到点时速度剖面已压到 0.8 m/s，
+                #   于是第二次及以后发目标，第一帧就带 0.8 m/s 冲向旧轮角
+                #   方向（物理轮子还没转到 alpha0），0.3 s 甩出 ~0.24 m，
+                #   触发「切入角 37.7° → 滞后 0.110 s > τ 0.091 s → 过冲 →
+                #   越修越偏」的雪球。归零后每次出发都和第 1 次一样从静止
+                #   平滑加速。alpha0 仍覆写（cos(Δα)=1，v=0 不会锁死）。
+                old_alpha = float(self.mpc.last_aug_state[1])
+                self._align_hold_time = min(
+                    abs(wrap_angle(alpha0 - old_alpha)) / 6.0, 0.30)
+                self._goal_start_time = time.monotonic()
                 self.mpc.last_aug_state = np.array(
-                    [float(self.mpc.last_aug_state[0]), alpha0, 0.0])
+                    [0.0, alpha0, 0.0], dtype=np.float64)
+
+                # ② 对齐窗口交给 MPC：_stage_queries 在这个窗口内把参考点
+                #   推进速度压到 0.10 m/s（软限制，不碰 acados 的 ubx），
+                #   让物理舵轮先转正、车只走 ~3 cm。
+                self.mpc.startup_hold = (self._goal_start_time,
+                                         self._align_hold_time)
         except Exception:                      # noqa: BLE001
             pass
 

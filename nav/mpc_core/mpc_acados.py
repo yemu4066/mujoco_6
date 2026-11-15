@@ -1,5 +1,6 @@
 import os
 import math
+import time
 
 import numpy as np
 from abc import ABC, abstractmethod
@@ -185,11 +186,25 @@ class AcadosMPCBase(ABC):
         #   "fp and xp are not of the same length" → nav_node 崩溃）。
         #   这里把 vmax 的坐标统一摊到 [0, s_max]。
         v_coord = np.linspace(0.0, s_max, len(vmax)) if s_max > 0 else np.zeros(len(vmax))
+
+        # ★ 起步对齐期：新目标下发后的前 hold_time 内，参考点只以 0.10 m/s
+        #   推进。MPC 追这个慢速参考点 → 输出 v≈0.10，车只走 3 cm，
+        #   物理舵轮有足够时间从 alpha_old 转到 alpha0。
+        #   不动 ref_speed、不碰 acados 的 ubx —— 避免上次那种
+        #   「stage 175 越界把 0.15 m/s 永久锁死」的坑。
+        hold = getattr(self, 'startup_hold', None)
+        in_hold = False
+        if hold is not None:
+            t0, hold_time = hold
+            in_hold = hold_time > 0.0 and (time.monotonic() - t0) < hold_time
+
         out = np.empty(N, dtype=float)
         s_curr = float(np.clip(s_start, 0.0, s_max))
         for k in range(N):
             out[k] = s_curr
             v_k = max(float(np.interp(s_curr, v_coord, vmax)), 0.2)
+            if in_hold:
+                v_k = min(v_k, 0.10)
             s_curr = min(s_curr + v_k * self.dt, s_max)
         return out
 
