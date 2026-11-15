@@ -3,7 +3,7 @@
 主入口：
 
     from nav import Navigation
-    nav = Navigation(map_yaml='maps/rc2027.yaml')
+    nav = Navigation(map_yaml='maps/your_map.yaml')
     nav.set_goal(2.3, -1.3, yaw=0.0)
     cmd = nav.update(x, y, yaw)      # (vx, vy, wz) 或 None
 

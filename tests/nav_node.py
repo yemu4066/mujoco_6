@@ -94,9 +94,10 @@ class NavNode(Node):
 
         self.create_subscription(PoseStamped, '/goal_pose', self._on_goal, 10)
         self.create_subscription(Odometry, '/odom', self._on_odom, 20)
-        # 真机：激光雷达（MS200 等 2D 单线）
+        # 障碍输入 A：2D 单线激光雷达（MS200 等），优先使用
         self.create_subscription(LaserScan, 'scan', self._on_scan, 10)
-        # 仿真：障碍真值（没有雷达时用它测避障逻辑）
+        # 障碍输入 B：外部系统的障碍检测结果（圆形容器列表）。
+        # 只在没有雷达数据时启用，用于无雷达环境下的验证。
         self.create_subscription(ObstacleArray, '/obstacles', self._on_obstacles, 10)
         # 调试：Foxglove 3D 面板点一下就在那儿放个障碍，用来测重规划。
         # 发 geometry_msgs/PointStamped 到 /debug_obstacle（累加），
@@ -110,7 +111,8 @@ class NavNode(Node):
         self._arrived_logged = False
         self._scan_logged = False
         self._has_scan = False
-        self.obstacle_z_max = 1.0    # 高于这个高度的障碍忽略（够不着）
+        # 高于这个高度的障碍不参与避让（车体够不着；低装雷达同样扫不到）
+        self.obstacle_z_max = 1.0
         self._map_msg = self._build_costmap()
         # 周期性重发：Foxglove 默认用 VOLATILE 订阅，晚连上收不到
         # 启动时发的那一条 TRANSIENT_LOCAL 历史消息，所以隔一秒再发一次。
@@ -181,15 +183,15 @@ class NavNode(Node):
                 f'{math.degrees(msg.angle_min + msg.angle_increment * len(msg.ranges)):.0f}°')
 
     def _on_obstacles(self, msg: ObstacleArray) -> None:
-        """仿真障碍真值：转成世界坐标点喂给库（仅在没雷达时用）。"""
+        """外部障碍检测结果 → 世界坐标点云（仅在无雷达数据时启用）。"""
         if self._has_scan:
-            return          # 有真雷达就不看仿真障碍
+            return          # 有雷达数据时以雷达为准
         pts = []
         for obs in msg.obstacles:
             if obs.confidence < 0.5:
                 continue
-            # 按高度过滤：车在地面/L1，够不着 L2（z≈1.175）上的物体。
-            # 真雷达也有同样的问题——装在低处的雷达扫不到高处的物体。
+            # 按高度过滤：高于车体的障碍不需要避让。
+            # （低装雷达天然也扫不到高处，两边语义一致）
             if obs.position.z > self.obstacle_z_max:
                 continue
             r = max(0.05, float(obs.radius))
