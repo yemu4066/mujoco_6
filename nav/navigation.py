@@ -141,7 +141,10 @@ class Navigation:
         # ---- 制动包络 ----
         # 规划层用的减速度 [m/s²]，故意小于 MPC 的 dv_max（3.0）：
         # MPC 是渐近逼近，不是 bang-bang，按满打满算会在末端刹不住。
-        self.brake_decel = 3.0
+        self.brake_decel = 2.0
+        # 弯道限速用的「转向率系数」：只用 k_steer 去匹配路径曲率，
+        # 把 dα_max(=6.0) 的剩余部分留给弯中修正横向偏差。
+        self.k_steer_limit = 2.2
         # 规划层用的加速度 [m/s²]，同样小于 dv_max，避免"理论上一脚到 4.0"。
         self.accel_plan = 3.0
         self.alpha_speed_free = 0.20     # rad（约 11°）
@@ -168,7 +171,7 @@ class Navigation:
         # 拐角处照样 1.2 m/s 冲过去。降到 2.5 后 κ=2.85 的弯限到 1.03 m/s。
         # 实测总时间几乎不变（拐角弧长占比极小），但拐角是真降速了。
         self.lat_acc_max = 5.0          # 允许的最大横向加速度 [m/s²]
-        self.speed_min = 0.20         # 再慢也不低于这个
+        self.speed_min = 0.80         # 再慢也不低于这个（弯道贴线需要余量）
 
         # 路径上每点的限速（set_goal 时算）
         self._path_s: np.ndarray | None = None
@@ -310,6 +313,17 @@ class Navigation:
         self._goal = (float(x), float(y), float(yaw))
         self._path = points
         self._build_speed_profile(points)
+
+        # 把速度剖面交给 MPC：_stage_queries 按 v(s) 逐阶段积分生成参考点，
+        # 弯道处参考点自己慢下来（间距 4cm → ~0.8cm），MPC 为了不跑过头
+        # 会主动输出负 dv 提前刹车，而不是被 4m/s 恒定参考点拽着冲弯。
+        try:
+            self.mpc.speed_profile = (
+                np.asarray(self.mpc.path_planner.s_samples, dtype=float),
+                np.asarray(self._path_vmax, dtype=float),
+            )
+        except Exception:                      # noqa: BLE001
+            self.mpc.speed_profile = None
         self._phase = TRACK
         self._blocked = False
         self.last_error = ''
@@ -473,7 +487,7 @@ class Navigation:
         #   车以 1.0+ m/s 进弯，α 转不过来 → 冲出弯道 → 就是"过直角墙撞墙"。
         radius = 1.0 / np.maximum(kappa, 1e-3)
         v_lat = np.sqrt(self.lat_acc_max * radius)      # 横向加速度
-        v_steer = self.dalpha_max * radius              # 转向速率
+        v_steer = self.k_steer_limit * radius           # 转向速率（留余量）
         v_curve = np.minimum(v_lat, v_steer)
 
         # ---- 掉头 / 折返：不能用曲率限速 ----
