@@ -66,6 +66,7 @@ class AcadosMPCBase(ABC):
         # v 上限 = |ref_speed| × margin，再夹到 floor 以上（保证折返/低速时不至于卡死）
         self.v_cap_margin = 1.20
         self.v_cap_floor = 0.60
+        self.v_cap_extra = None      # 外部临时压低的速度上限（起步对齐期用）
         self._vcap_failed = False
         self._vcap_applied = False
         self._vcap_dim = None
@@ -229,6 +230,10 @@ class AcadosMPCBase(ABC):
         if self.following and not self._vcap_failed:
             v_cap = abs(float(self.ref_speed)) * self.v_cap_margin
             v_cap = max(v_cap, self.v_cap_floor)
+            # 起步对齐期：外部传进来的临时上限，允许低于 floor
+            extra = getattr(self, 'v_cap_extra', None)
+            if extra is not None:
+                v_cap = min(v_cap, float(extra))
             # idxbx 只选了 v/α/ω 三个状态，所以 lbx/ubx 必须是长度 3
             lb = np.array([-v_cap, -math.pi, 0.0])
             ub = np.array([v_cap, math.pi, 0.0])
@@ -418,7 +423,14 @@ class AugmentedSwerveMPC(AcadosMPCBase):
         # 但 W[2] 本质是横向回线的「阻尼」：e_lat_dot ≈ v·e_ψ，
         # 惩罚 e_ψ 就是惩罚回线速度。实测切入角从 31.4° 掉到 7.0°，
         # 收敛距离从 0.55 m 涨到 2.45 m —— 车平行于路径平移，窄道撞墙。
-        ocp.cost.W = np.diag([2.0, 2.0, 0.2, 4.0, 0, 0, 0, 0.05, 0.2, 0.2])
+        # 方案 B：横向刚度 1.5+8.0 = 9.5（原 6.0，+58%），方向阻尼 1.2（原 0.2）。
+        # W[2] 的作用是给横向回线加「阻尼」：e_lat_dot ≈ v·e_ψ，惩罚 e_ψ
+        # 就是惩罚回线速度。回线时间常数 τ = 1/(v·sqrt(q_lat/W[2]))：
+        #     W[2]=0.2 → τ=0.046 s，小于 30° 时的执行滞后 0.131 s → 欠阻尼振荡
+        #     W[2]=1.2 → τ=0.089 s，接近临界；正常跟踪（偏差<5cm、Δα<12°，
+        #                滞后<0.05 s）时仍远大于滞后，不会拖慢小幅修正
+        #     W[2]=4.0 → τ=0.204 s，过阻尼 → 平行偏置、窄道撞墙
+        ocp.cost.W = np.diag([1.5, 1.5, 1.2, 8.0, 0, 0, 0, 0.05, 0.2, 0.2])
         ocp.cost.W_e = np.diag([4.0, 4.0, 0.2, 4.0, 0.2, 0.2, 0.2])
 
     def update(self, x_current: np.ndarray) -> np.ndarray:

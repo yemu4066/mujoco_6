@@ -221,6 +221,10 @@ class Navigation:
         self.stuck_frames_threshold = 30   # 约 0.3 s（10 ms 一帧）
         self.kick_speed = 0.15             # 脱困速度 [m/s]
         self.last_error = ''        # 最近一次 set_goal 失败的原因
+        # 起步对齐门控（只压 v_cap，不动 ref_speed）
+        self._has_received_goal = False
+        self._align_hold_time = 0.0
+        self._goal_start_time = 0.0
 
     # ================================================================
     # 对外接口
@@ -302,8 +306,23 @@ class Navigation:
                 seg = points[1] - points[0]
                 path_heading = math.atan2(float(seg[1]), float(seg[0]))
                 alpha0 = wrap_angle(path_heading - float(start[2]))
+
+                # 先读旧 alpha（必须在覆写之前），据此估算物理轮子转到位
+                # 需要多久；首个目标点不做等待。
+                if self._has_received_goal:
+                    old_alpha = float(self.mpc.last_aug_state[1])
+                    d_alpha = abs(wrap_angle(alpha0 - old_alpha))
+                    # 底层 steer_rate_limit=8.0，除以 6.0 留 ~25% 余量
+                    self._align_hold_time = min(d_alpha / 6.0, 0.35)
+                else:
+                    self._align_hold_time = 0.0
+                self._has_received_goal = True
+                self._goal_start_time = time.monotonic()
+
+                # v 归零（消掉上一趟残留的初速度冲击），alpha 仍用 alpha0：
+                # 保留 alpha0 时 cos(Δα)=1，v=0 不会触发「梯度消失锁死」。
                 self.mpc.last_aug_state = np.array(
-                    [float(self.mpc.last_aug_state[0]), alpha0, 0.0])
+                    [0.0, alpha0, 0.0], dtype=np.float64)
         except Exception:                      # noqa: BLE001
             pass
 
@@ -386,6 +405,17 @@ class Navigation:
 
         # ---- 按横向余量调整参考速度 ----
         self._apply_speed_limit()
+
+        # ---- 起步对齐门控：只压 v_cap，不动 ref_speed ----
+        # 对齐期 0.15 m/s（轮子转正，位移 < 8 cm），之后 0.3 s 线性放开。
+        dt_goal = time.monotonic() - self._goal_start_time
+        if dt_goal < self._align_hold_time:
+            self.mpc.v_cap_extra = 0.15
+        elif dt_goal < self._align_hold_time + 0.30:
+            ratio = (dt_goal - self._align_hold_time) / 0.30
+            self.mpc.v_cap_extra = 0.15 + (4.0 - 0.15) * ratio
+        else:
+            self.mpc.v_cap_extra = None
 
         # ---- 阶段 ①：MPC 跟踪 ----
         u = self.mpc.update(np.array([x, y, yaw]))
