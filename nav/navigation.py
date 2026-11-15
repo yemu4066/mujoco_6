@@ -144,7 +144,10 @@ class Navigation:
         self.brake_decel = 2.0
         # 弯道限速用的「转向率系数」：只用 k_steer 去匹配路径曲率，
         # 把 dα_max(=6.0) 的剩余部分留给弯中修正横向偏差。
-        self.k_steer_limit = 2.2
+        # 弯道转向系数：只占用 k_steer/dalpha_max 的比例去匹配路径曲率，
+        # 其余留给弯中修正。2.2 时 R=0.35 只给 0.77 m/s 偏保守；
+        # 2.8 给 0.98 m/s，仍留 53% 转向余量（2.8/6.0 = 47%）。
+        self.k_steer_limit = 2.8
         # 规划层用的加速度 [m/s²]，同样小于 dv_max，避免"理论上一脚到 4.0"。
         self.accel_plan = 3.0
         self.alpha_speed_free = 0.20     # rad（约 11°）
@@ -170,8 +173,9 @@ class Navigation:
         # 原来设 100，导致 sqrt(100/2.85)=5.9 m/s，比限速上限还高 —— 这一项等于没写，
         # 拐角处照样 1.2 m/s 冲过去。降到 2.5 后 κ=2.85 的弯限到 1.03 m/s。
         # 实测总时间几乎不变（拐角弧长占比极小），但拐角是真降速了。
-        self.lat_acc_max = 5.0          # 允许的最大横向加速度 [m/s²]
-        self.speed_min = 0.80         # 再慢也不低于这个（弯道贴线需要余量）
+        self.lat_acc_max = 6.0          # 允许的最大横向加速度 [m/s²]
+        # 弯道速度下限 0.8 → 1.0：最小视野从 1.41 m 涨到 1.76 m。
+        self.speed_min = 1.00         # 再慢也不低于这个
 
         # 路径上每点的限速（set_goal 时算）
         self._path_s: np.ndarray | None = None
@@ -337,31 +341,18 @@ class Navigation:
         self._path = points
         self._kick_frames = 0
 
-        # ============================================================
-        # ★★★ 限速模块已临时注释，用于对比「有/无弯道减速」的效果 ★★★
-        #
-        # 注释掉之后：
-        #   _path_vmax 保持 None → mpc.speed_profile = None
-        #   → _stage_queries 走 prof is None 分支：
-        #         s_start + ref_speed × dt × arange(N)
-        #   → 参考点恒以 4.0 m/s 等间距推进，弯道不再自动变密
-        #   → 结果：MPC 不再被"密集参考点"逼着减速，弯道会全速冲
-        #
-        # 恢复：取消下面两段的注释即可。
-        # ============================================================
-        # self._build_speed_profile(points)
-        #
-        # # 把速度剖面交给 MPC：_stage_queries 按 v(s) 逐阶段积分生成参考点，
-        # # 弯道处参考点自己慢下来（间距 4cm → ~0.8cm），MPC 为了不跑过头
-        # # 会主动输出负 dv 提前刹车，而不是被 4m/s 恒定参考点拽着冲弯。
-        # try:
-        #     self.mpc.speed_profile = (
-        #         np.asarray(self.mpc.path_planner.s_samples, dtype=float),
-        #         np.asarray(self._path_vmax, dtype=float),
-        #     )
-        # except Exception:                      # noqa: BLE001
-        #     self.mpc.speed_profile = None
-        self.mpc.speed_profile = None
+        self._build_speed_profile(points)
+
+        # 把速度剖面交给 MPC：_stage_queries 按 v(s) 逐阶段积分生成参考点，
+        # 弯道处参考点自己慢下来（间距随 v 变化），MPC 为了不跑过头会主动
+        # 输出负 dv 提前刹车，而不是被恒定 4 m/s 的参考点拽着冲弯。
+        try:
+            self.mpc.speed_profile = (
+                np.asarray(self.mpc.path_planner.s_samples, dtype=float),
+                np.asarray(self._path_vmax, dtype=float),
+            )
+        except Exception:                      # noqa: BLE001
+            self.mpc.speed_profile = None
         self._phase = TRACK
         self._blocked = False
         self.last_error = ''
