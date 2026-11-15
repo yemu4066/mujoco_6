@@ -201,7 +201,11 @@ class Navigation:
         self._manual_centers: list[tuple[float, float, float]] = []
         self._scan_dirty = False
         self._last_replan = 0.0
-        self.replan_interval = 0.4        # 最快重规划间隔 [s]
+        # 最快重规划间隔：0.4 → 0.25 s，让车对逼近的障碍反应更及时。
+        # 代价：一次重规划 A* 50~70 ms + smooth 10~20 ms ≈ 70~100 ms，
+        #      所以相邻两次之间至少留 2~3 倍余量，0.25 s 是下限附近。
+        #      再小（<0.2）会让 /cmd_vel 明显掉频。
+        self.replan_interval = 0.25       # 最快重规划间隔 [s]
         self.blocked_retry_interval = 0.6 # 被堵死时多久重试一次 [s]
         # 动态障碍的膨胀半径（A* 会绕开这么远）。
         # 原来 = inscribed_radius(0.45) + obstacle_clearance(0.05) = 0.50 m。
