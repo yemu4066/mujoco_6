@@ -56,7 +56,7 @@ def generate_launch_description() -> LaunchDescription:
                               description='是否启动 foxglove_bridge'),
         DeclareLaunchArgument(
             'workspace',
-            default_value=os.path.join(os.path.expanduser('~'), 'my_work', 'mujoco_6'),
+            default_value=os.path.join(os.path.expanduser('~'), 'ros2_ws'),
             description='含 tests/nav_node.py 的仓库根目录'),
 
         # ---- 仿真 ----
