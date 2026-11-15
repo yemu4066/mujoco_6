@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 空白测试场景：20×20 m 平地 + 主分支舵轮底盘，无任何场地几何。
+
+     用途：动态避障/跟踪算法的干净复现环境 —— 没有墙、坡、方块、移动对手。
+     与 rc2027/scene_nav.xml 的差异：
+       · 删掉全部场地 mesh / geom
+       · 底盘起点从 (4.75, -4.80) 移到 (0, 0)
+       · 地面换成 20×20 平面
+       · 保留灯光、三个相机、底盘、contact 排除、8 个舵轮 actuator
+
+     配套地图：maps/empty_20x20.yaml（origin [-10,-10]，res 0.05）
+
+     用法见 sim/mujoco_ros2_bridge/README 或询问维护者。
+     （XML 注释里不能出现连续两个减号，所以这里不写完整命令行）
+-->
+<mujoco model="empty_arena">
+  <compiler angle="radian" meshdir="meshes" autolimits="true" balanceinertia="true" />
+  <option timestep="0.001" gravity="0 0 -9.81" iterations="100" tolerance="1e-12" />
+
+  <asset>
+  </asset>
+
+  <worldbody>
+    <light name="sun" pos="0 0 12" dir="0 0 -1" directional="true" castshadow="true"
+           diffuse="0.55 0.55 0.55" specular="0.15 0.15 0.15" />
+    <camera name="camera_top"   pos="0.00 0.00 12.00" quat="1 0 0 0" fovy="45" />
+    <camera name="camera_sw"    pos="-8.50 -8.50 6.50" xyaxes="0.707107 -0.707107 0.000000 0.324132 0.324132 0.888750" fovy="45" />
+    <camera name="camera_south" pos="0.00 -9.50 3.20" xyaxes="1.000000 -0.000000 0.000000 0.000000 0.263976 0.964529" fovy="45" />
+
+    <!-- 空白地面 20×20 m：视觉 + 碰撞两层 -->
+    <geom name="floor" type="plane" size="10 10 0.1"
+          rgba="0.55 0.55 0.58 1" contype="0" conaffinity="0" condim="3" />
+    <geom name="floor_collision" type="plane" size="10 10 0.1"
+          rgba="0 0 0 0" contype="1" conaffinity="1" condim="3"
+          friction="1.0 0.005 0.0001" />
+
+    <body name="chassis" pos="0 0 0.235" quat="0.7071067811865476 0 0 0.7071067811865476">
+        <freejoint name="root"/>
+
+        <geom name="chassis_visual_main" type="box" size="0.300 0.300 0.08" pos="0 0 -0.0" rgba="0.8 0.3 0.3 1" contype="0" conaffinity="0" mass="0"/>
+        <!-- <geom name="chassis_visual_top" type="box" size="0.38 0.38 0.01" pos="0 0 0.06" rgba="0.6 0.2 0.2 1" contype="0" conaffinity="0" mass="0"/> -->
+
+        <!-- <geom name="chassis_visual_center" type="box" size="0.4 0.4 0.04" pos="-0.02 0 0" rgba="0.8 0.3 0.3 1" contype="0" conaffinity="0" mass="0"/> -->
+        <!-- <geom name="chassis_visual_rear" type="box" size="0.16 0.14 0.03" pos="-0.18 0 0.04" rgba="0.8 0.3 0.3 1" contype="0" conaffinity="0" mass="0"/> -->
+        <geom name="chassis_mass" type="box" size="0.30 0.20 0.04" pos="0.10 0.03 -0.05" rgba="0.8 0.3 0.3 0" mass="16" contype="0" conaffinity="0"/>
+        <!-- 与 650 视觉方块一致的碰撞体：参与物理碰撞，解决“车身穿墙” -->
+        <geom name="chassis_collision" type="box" size="0.300 0.300 0.08" pos="0 0 -0.02"
+              rgba="0 0 0 0" mass="0" contype="1" conaffinity="1" group="1"
+              solref="0.02 1" solimp="0.9 0.95 0.001"/>
+        <body name="wheel0_pivot" pos="0.24 0.24 -0.093">
+            <joint name="wheel0_steer" type="hinge" axis="0 0 1" damping="2.0" armature="0.01"/>
+            <geom type="cylinder" size="0.04 0.02" rgba="0.3 0.3 0.8 1" mass="0.5" contype="0" conaffinity="0"/>
+            <body name="wheel0" pos="0 0 -0.058">
+                <joint name="wheel0_drive" type="hinge" axis="0 1 0" damping="2.0" armature="0.05"/>
+                <geom type="cylinder" size="0.058 0.02" zaxis="0 1 0" rgba="0.2 0.2 0.2 1" friction="2.5 0.01 0.005" mass="1.0" contype="1" conaffinity="1"/>
+            </body>
+        </body>
+
+        <body name="wheel1_pivot" pos="0.24 -0.24 -0.093">
+            <joint name="wheel1_steer" type="hinge" axis="0 0 1" damping="2.0" armature="0.01"/>
+            <geom type="cylinder" size="0.04 0.02" rgba="0.3 0.3 0.8 1" mass="0.5" contype="0" conaffinity="0"/>
+            <body name="wheel1" pos="0 0 -0.058">
+                <joint name="wheel1_drive" type="hinge" axis="0 1 0" damping="2.0" armature="0.05"/>
+                <geom type="cylinder" size="0.058 0.02" zaxis="0 1 0" rgba="0.2 0.2 0.2 1" friction="2.5 0.01 0.005" mass="1.0" contype="1" conaffinity="1"/>
+            </body>
+        </body>
+
+        <body name="wheel2_pivot" pos="-0.24 0.24 -0.093">
+            <joint name="wheel2_steer" type="hinge" axis="0 0 1" damping="2.0" armature="0.01"/>
+            <geom type="cylinder" size="0.04 0.02" rgba="0.3 0.3 0.8 1" mass="0.5" contype="0" conaffinity="0"/>
+            <body name="wheel2" pos="0 0 -0.058">
+                <joint name="wheel2_drive" type="hinge" axis="0 1 0" damping="2.0" armature="0.05"/>
+                <geom type="cylinder" size="0.058 0.02" zaxis="0 1 0" rgba="0.2 0.2 0.2 1" friction="2.5 0.01 0.005" mass="1.0" contype="1" conaffinity="1"/>
+            </body>
+        </body>
+
+        <body name="wheel3_pivot" pos="-0.24 -0.24 -0.093">
+            <joint name="wheel3_steer" type="hinge" axis="0 0 1" damping="2.0" armature="0.01"/>
+            <geom type="cylinder" size="0.04 0.02" rgba="0.3 0.3 0.8 1" mass="0.5" contype="0" conaffinity="0"/>
+            <body name="wheel3" pos="0 0 -0.058">
+                <joint name="wheel3_drive" type="hinge" axis="0 1 0" damping="2.0" armature="0.05"/>
+                <geom type="cylinder" size="0.058 0.02" zaxis="0 1 0" rgba="0.2 0.2 0.2 1" friction="2.5 0.01 0.005" mass="1.0" contype="1" conaffinity="1"/>
+            </body>
+        </body>
+
+        <geom name="head_marker" type="box" size="0.05 0.2 0.01" pos="0.27 0 0.085" rgba="0 1 0 1" contype="0" conaffinity="0" mass="0"/>
+    </body>
+
+    <!-- 场地围栏补强：原碰撞层只有 100 mm 高，116 mm 的轮子能被顶过去。
+         这里叠一层 500 mm 高的不可见碰撞墙（视觉仍用原围栏 mesh）。 -->
+    <geom name="nav_fence_n" type="box" size="5.55 0.05 0.25" pos="0 5.525 0.275"
+          rgba="0 0 0 0" contype="1" conaffinity="1" group="1"/>
+    <geom name="nav_fence_s" type="box" size="5.55 0.05 0.25" pos="0 -5.525 0.275"
+          rgba="0 0 0 0" contype="1" conaffinity="1" group="1"/>
+    <geom name="nav_fence_e" type="box" size="0.05 5.55 0.25" pos="5.525 0 0.275"
+          rgba="0 0 0 0" contype="1" conaffinity="1" group="1"/>
+    <geom name="nav_fence_w" type="box" size="0.05 5.55 0.25" pos="-5.525 0 0.275"
+          rgba="0 0 0 0" contype="1" conaffinity="1" group="1"/>
+
+    <!-- 两个 650×650 的移动对手（mocap，仅视觉 + 真值发布，不参与物理碰撞）。
+         L1：对方半场（x<0）西侧走廊 + 北侧公共边缘，L 形折返，台面 z=0.625；
+         L2：中央公共区绕中央基座环行，台面 z=0.925。
+         导航侧完全不读这些 body，只读 mujoco_node 换算出的 ObstacleArray。 -->
+    <body name="obstacle_l1" mocap="true" pos="-2.2 -2.5 0.875">
+      <geom name="obstacle_l1_geom" type="box" size="0.325 0.325 0.25"
+            mass="5.0" rgba="1 0.55 0.10 0.85" contype="0" conaffinity="0" group="2" />
+    </body>
+    <body name="obstacle_l2" mocap="true" pos="0.85 0 1.175">
+      <geom name="obstacle_l2_geom" type="box" size="0.325 0.325 0.25"
+            mass="5.0" rgba="1 0.20 0.60 0.85" contype="0" conaffinity="0" group="2" />
+    </body>
+  </worldbody>
+
+  <contact>
+    <exclude body1="chassis" body2="wheel0_pivot"/>
+    <exclude body1="chassis" body2="wheel1_pivot"/>
+    <exclude body1="chassis" body2="wheel2_pivot"/>
+    <exclude body1="chassis" body2="wheel3_pivot"/>
+    <exclude body1="chassis" body2="wheel0"/>
+    <exclude body1="chassis" body2="wheel1"/>
+    <exclude body1="chassis" body2="wheel2"/>
+    <exclude body1="chassis" body2="wheel3"/>
+  </contact>
+
+  <actuator>
+    <position joint="wheel0_steer" name="steer0" kp="50" forcerange="-300 300"/>
+    <velocity joint="wheel0_drive" name="drive0" kv="40" forcerange="-180 180"/>
+    <position joint="wheel1_steer" name="steer1" kp="50" forcerange="-300 300"/>
+    <velocity joint="wheel1_drive" name="drive1" kv="40" forcerange="-180 180"/>
+    <position joint="wheel2_steer" name="steer2" kp="50" forcerange="-300 300"/>
+    <velocity joint="wheel2_drive" name="drive2" kv="40" forcerange="-180 180"/>
+    <position joint="wheel3_steer" name="steer3" kp="50" forcerange="-300 300"/>
+    <velocity joint="wheel3_drive" name="drive3" kv="40" forcerange="-180 180"/>
+  </actuator>
+</mujoco>
