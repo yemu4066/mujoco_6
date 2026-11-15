@@ -410,15 +410,13 @@ class Navigation:
         # ---- 起步对齐门控：只压 v_cap，不动 ref_speed ----
         # 对齐期 0.15 m/s（轮子转正，位移 < 8 cm），之后 0.3 s 线性放开。
         dt_goal = time.monotonic() - self._goal_start_time
-        # ★ 临时绕过门控，验证「超级龟速」是不是它造成的
-        self.mpc.v_cap_extra = None
-        # if dt_goal < self._align_hold_time:
-        #     self.mpc.v_cap_extra = 0.15
-        # elif dt_goal < self._align_hold_time + 0.30:
-        #     ratio = (dt_goal - self._align_hold_time) / 0.30
-        #     self.mpc.v_cap_extra = 0.15 + (4.0 - 0.15) * ratio
-        # else:
-        #     self.mpc.v_cap_extra = None
+        if dt_goal < self._align_hold_time:
+            self.mpc.v_cap_extra = 0.15
+        elif dt_goal < self._align_hold_time + 0.30:
+            ratio = (dt_goal - self._align_hold_time) / 0.30
+            self.mpc.v_cap_extra = 0.15 + (4.0 - 0.15) * ratio
+        else:
+            self.mpc.v_cap_extra = None
 
         self._gate_n = getattr(self, '_gate_n', 0) + 1
         if self._gate_n % 50 == 0:
