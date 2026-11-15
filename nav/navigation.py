@@ -251,10 +251,20 @@ class Navigation:
         return self._goal
 
     def set_goal(self, x: float, y: float, yaw: float = 0.0,
-                 pose: tuple[float, float, float] | None = None) -> bool:
+                 pose: tuple[float, float, float] | None = None,
+                 is_replan: bool = False) -> bool:
         """规划到目标。返回 False 表示不可达（此时状态不变）。
 
         ``pose`` 是当前位姿，省略时用上一次 ``update`` 传入的值。
+
+        ``is_replan=True`` 表示这是「动态障碍挡路」触发的重规划，**不是新任务**：
+        路径、速度剖面照常重算，但不动以下状态 ——
+            mpc.last_aug_state  （v / α 保持连续，不能归零）
+            mpc.startup_hold    （不能触发 0.10 m/s 的起步对齐窗口）
+            _phase              （ALIGN 阶段不该被打回 TRACK）
+            _stuck_frames / _anchor
+            warm-up 空跑        （solver 正在跑，warm start 就是当前状态）
+        否则车在行驶中每次重规划都会「刹一下再重新加速」，一顿一顿的。
         """
         start = pose if pose is not None else self._last_pose
         if start is None:
@@ -308,44 +318,41 @@ class Navigation:
                              adaptive=self.smooth_adaptive)
         self.mpc.set_path(points, target_yaw=float(yaw), ref_speed=self.ref_speed)
 
-        # ★ 把 MPC 内部的 α 初值设成「路径方向 − 车头方向」。
-        #   α 是增广状态，默认从 0 开始（= 运动方向与车头一致），
-        #   于是起步时要靠 dα ≤ 4 rad/s 一格格爬过去：90° 差要 0.39 s、
-        #   4 m/s 下白走 1.57 m 的斜线，看起来就是"启动不按路径走"。
-        #   直接给它正确的初值，MPC 第一帧起就知道该往哪走。
-        try:
-            if len(points) >= 2:
-                seg = points[1] - points[0]
-                path_heading = math.atan2(float(seg[1]), float(seg[0]))
-                alpha0 = wrap_angle(path_heading - float(start[2]))
+        # ============================================================
+        # 以下整段是「新任务」的起步初始化，重规划时**全部跳过**。
+        # 重规划时车还在跑，把 v 归零 / 触发 0.10 m/s 对齐窗口 / 退回 TRACK，
+        # 都会让车在行驶中莫名其妙刹一下。
+        # ============================================================
+        if not is_replan:
+            # ★ 把 MPC 内部的 α 初值设成「路径方向 − 车头方向」。
+            #   α 是增广状态，默认从 0 开始（= 运动方向与车头一致），
+            #   于是起步时要靠 dα 一格格爬过去：90° 差要 0.39 s、
+            #   4 m/s 下白走 1.57 m 的斜线，看起来就是"启动不按路径走"。
+            #   直接给它正确的初值，MPC 第一帧起就知道该往哪走。
+            try:
+                if len(points) >= 2:
+                    seg = points[1] - points[0]
+                    path_heading = math.atan2(float(seg[1]), float(seg[0]))
+                    alpha0 = wrap_angle(path_heading - float(start[2]))
 
-                # ① v 归零：原来保留 v_old。到点时速度剖面已压到 0.8 m/s，
-                #   于是第二次及以后发目标，第一帧就带 0.8 m/s 冲向旧轮角
-                #   方向（物理轮子还没转到 alpha0），0.3 s 甩出 ~0.24 m，
-                #   触发「切入角 37.7° → 滞后 0.110 s > τ 0.091 s → 过冲 →
-                #   越修越偏」的雪球。归零后每次出发都和第 1 次一样从静止
-                #   平滑加速。alpha0 仍覆写（cos(Δα)=1，v=0 不会锁死）。
-                # ★ 参考系换算已按要求注释掉，先验证「不修正」的表现。
-                #   原来这里是：old_alpha = wrap(last_alpha + (track_yaw − 车头))
-                #   但第一次 _track_yaw 为 None 不修正、之后修正，
-                #   就等于又造了一个「只有第一次和后面不一样」的分叉。
-                # track_yaw = getattr(self, '_track_yaw', None)
-                old_alpha = float(self.mpc.last_aug_state[1])
-                # if track_yaw is not None:
-                #     old_alpha = wrap_angle(old_alpha + (track_yaw - float(start[2])))
-                self._align_hold_time = min(
-                    abs(wrap_angle(alpha0 - old_alpha)) / 6.0, 0.30)
-                self._goal_start_time = time.monotonic()
-                self.mpc.last_aug_state = np.array(
-                    [0.0, alpha0, 0.0], dtype=np.float64)
+                    # ① v 归零：到点时速度剖面已压到 0.8 m/s，若保留 v_old，
+                    #   第二次发目标第一帧就带 0.8 m/s 冲向旧轮角方向
+                    #   （物理轮子还没转到 alpha0），0.3 s 甩出 ~0.24 m。
+                    #   alpha0 仍覆写（cos(Δα)=1，v=0 不会锁死）。
+                    old_alpha = float(self.mpc.last_aug_state[1])
+                    self._align_hold_time = min(
+                        abs(wrap_angle(alpha0 - old_alpha)) / 6.0, 0.30)
+                    self._goal_start_time = time.monotonic()
+                    self.mpc.last_aug_state = np.array(
+                        [0.0, alpha0, 0.0], dtype=np.float64)
 
-                # ② 对齐窗口交给 MPC：_stage_queries 在这个窗口内把参考点
-                #   推进速度压到 0.10 m/s（软限制，不碰 acados 的 ubx），
-                #   让物理舵轮先转正、车只走 ~3 cm。
-                self.mpc.startup_hold = (self._goal_start_time,
-                                         self._align_hold_time)
-        except Exception:                      # noqa: BLE001
-            pass
+                    # ② 对齐窗口交给 MPC：_stage_queries 在这个窗口内把参考点
+                    #   推进速度压到 0.10 m/s（软限制，不碰 acados 的 ubx），
+                    #   让物理舵轮先转正、车只走 ~3 cm。
+                    self.mpc.startup_hold = (self._goal_start_time,
+                                             self._align_hold_time)
+            except Exception:                      # noqa: BLE001
+                pass
 
         self._goal = (float(x), float(y), float(yaw))
         self._path = points
@@ -363,15 +370,20 @@ class Navigation:
             )
         except Exception:                      # noqa: BLE001
             self.mpc.speed_profile = None
-        self._phase = TRACK
+        # 重规划时保留 phase（ALIGN 不该被打回 TRACK）、
+        # _stuck_frames / _anchor（卡死计数和位移锚点跟路径无关）
+        if not is_replan:
+            self._phase = TRACK
+            self._stuck_frames = 0
+            self._anchor = None
         self._blocked = False
         self.last_error = ''
-        self._stuck_frames = 0
-        self._anchor = None
         self._last_replan = time.time()
 
         # ★ 空跑几次 mpc.update()，让 SQP_RTI 用「新参考轨迹」迭代几轮，
         #   冲掉上一个目标残留的解。
+        #   只在**新任务**时做：重规划时 solver 正在连续运行，warm start
+        #   就是当前状态，反而是最好的初值，再空跑只会白白多吃 5 次求解。
         #   SQP_RTI 用上一帧的解做线性化点；第二次及以后发目标时求解器
         #   内部还是「上一个目标终点附近」的解，新目标的参考轨迹位置和
         #   朝向完全不同，前几帧会在错误的线性化点展开，输出异常控制量
@@ -380,17 +392,18 @@ class Navigation:
         #   x/u 全铺成当前位姿（那等于告诉 RTI「车停原地」，而参考点已
         #   延伸到 7 m 外，首帧仍会输出大控制量），而是让 RTI 自己用正确
         #   的参考多迭代几次。临时关 startup_hold，跑完把状态恢复回去。
-        try:
-            hold_saved = getattr(self.mpc, 'startup_hold', None)
-            state_saved = np.array(self.mpc.last_aug_state, dtype=float, copy=True)
-            self.mpc.startup_hold = None
-            p0 = np.array([float(start[0]), float(start[1]), float(start[2])])
-            for _ in range(5):
-                self.mpc.update(p0)
-            self.mpc.last_aug_state = state_saved
-            self.mpc.startup_hold = hold_saved
-        except Exception as exc:               # noqa: BLE001
-            print(f'[MPC] warm start 预热跳过（{exc}）', flush=True)
+        if not is_replan:
+            try:
+                hold_saved = getattr(self.mpc, 'startup_hold', None)
+                state_saved = np.array(self.mpc.last_aug_state, dtype=float, copy=True)
+                self.mpc.startup_hold = None
+                p0 = np.array([float(start[0]), float(start[1]), float(start[2])])
+                for _ in range(5):
+                    self.mpc.update(p0)
+                self.mpc.last_aug_state = state_saved
+                self.mpc.startup_hold = hold_saved
+            except Exception as exc:           # noqa: BLE001
+                print(f'[MPC] warm start 预热跳过（{exc}）', flush=True)
 
         return True
 
@@ -435,7 +448,7 @@ class Navigation:
             self._scan_dirty = False
             self._last_replan = time.time()
             if not self.set_goal(self._goal[0], self._goal[1], self._goal[2],
-                                 pose=self._last_pose):
+                                 pose=self._last_pose, is_replan=True):
                 # 被堵死：先停下来等障碍移开，主逻辑可通过 nav.blocked 判断
                 self._blocked = True
             else:
@@ -448,7 +461,7 @@ class Navigation:
                     and time.time() - self._last_replan > self.blocked_retry_interval):
                 self._last_replan = time.time()
                 if self.set_goal(self._goal[0], self._goal[1], self._goal[2],
-                                 pose=self._last_pose):
+                                 pose=self._last_pose, is_replan=True):
                     self._blocked = False
                 else:
                     return (0.0, 0.0, 0.0)
