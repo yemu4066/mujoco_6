@@ -94,9 +94,7 @@
     <mesh name="mesh_建造点-6" file="field/build_spot_06.obj" inertia="shell" />
     <mesh name="mesh_建造点-7" file="field/build_spot_07.obj" inertia="shell" />
     <mesh name="mesh_3区" file="field/l2_platform.obj" inertia="shell" />
-    <mesh name="mesh_二层台阶-红" file="field/l2_stairs_red.obj" inertia="shell" />
     <mesh name="mesh_建造点-8" file="field/build_spot_08.obj" inertia="shell" />
-    <mesh name="mesh_二层台阶-蓝" file="field/l2_stairs_blue.obj" inertia="shell" />
     <mesh name="mesh_3区-中央基座" file="field/central_pillar.obj" inertia="shell" />
     <mesh name="mesh_建造点-9" file="field/build_spot_09.obj" inertia="shell" />
     <mesh name="mesh_建造点-10" file="field/build_spot_10.obj" inertia="shell" />
@@ -227,16 +225,10 @@
     <geom name="3区" type="mesh" mesh="mesh_3区" material="rgb_190_190_185" pos="0 0 0" contype="0" conaffinity="0">
       <!-- 3区（规则附录 1 配色） -->
     </geom>
-    <geom name="二层台阶-红" type="mesh" mesh="mesh_二层台阶-红" material="rgb_235_180_160" pos="0 0 0" contype="0" conaffinity="0">
-      <!-- 二层台阶-红（规则附录 1 配色） -->
-    </geom>
     <geom name="建造点-8" type="mesh" mesh="mesh_建造点-8" material="rgb_040_100_050" pos="0 0 0" contype="0" conaffinity="0">
       <!-- 建造点-8（规则附录 1 配色） -->
     </geom>
     <site name="site_建造点-8-8" type="box" size="0.25 0.25 0.0005" pos="-1.2500 -1.2500 0.0030" rgba="0.16 0.39 0.2 0.85" />
-    <geom name="二层台阶-蓝" type="mesh" mesh="mesh_二层台阶-蓝" material="rgb_150_215_220" pos="0 0 0" contype="0" conaffinity="0">
-      <!-- 二层台阶-蓝（规则附录 1 配色） -->
-    </geom>
     <geom name="3区-中央基座" type="mesh" mesh="mesh_3区-中央基座" material="rgb_100_062_000" pos="0 0 0" contype="0" conaffinity="0">
       <!-- 3区-中央基座（规则附录 1 配色） -->
     </geom>
@@ -274,8 +266,6 @@
     <geom name="col_band_blue_step2" type="box" size="0.5 0.15 0.1625" pos="3.5000 -2.2500 0.1625" rgba="1 1 1 0" />
     <geom name="col_band_blue_step3" type="box" size="0.5 0.15 0.2375" pos="3.5000 -1.9500 0.2375" rgba="1 1 1 0" />
     <geom name="col_band_blue_ramp" type="box" size="0.5 1.7755 0.025" pos="3.5000 0.9460 0.3004" quat="0.996399 -0.084787 0 0" rgba="1 1 1 0" />
-    <geom name="col_l2stair_red" type="box" size="0.15 0.5 0.075" pos="-1.6500 0.0000 0.7000" rgba="1 1 1 0" />
-    <geom name="col_l2stair_blue" type="box" size="0.15 0.5 0.075" pos="1.6500 0.0000 0.7000" rgba="1 1 1 0" />
     <geom name="col_pillar_centre" type="cylinder" size="0.135 0.4" pos="0 0 1.325" rgba="1 1 1 0" />
     <geom name="mustika_pillar_col" type="cylinder" size="0.135 0.2" pos="0 4.25 0.225" rgba="1 1 1 0" />
       <geom name="pillar_ring_00" type="box" size="0.0242 0.0226 0.05" pos="0.1125 4.2500 0.475" quat="1.000000 0 0 0.000000" rgba="1 1 1 0" />
