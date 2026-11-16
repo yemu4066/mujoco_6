@@ -1,28 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- L2 对抗专用场景（"申"字形，全部压平到地面层）
 
-  只保留 L2 公共区，把 L1 整圈删掉。平面布局（北在上）：
+  只保留 L2 公共区，L1 整圈删掉。平面布局（北在上）：
 
               y=+1.5  ┌───────────┐
                       │           │
-              y=+0.35 ┌────┤   L2   ├────┐
-                      │ 西 │  3×3   │ 东 │    ← 东西两翼 700×700
-              y=-0.35 └────┤        ├────┘
+              y=+0.6　┌────┤   L2   ├────┐
+                      │ 西 │  3×3   │ 东 │    ← 东西两翼 1.2×1.2 m
+              y=-0.6　└────┤        ├────┘
                       │           │
               y=-1.5  └───────────┘
-                     x=-2.2  -1.5  1.5  2.2
+                     x=-2.7  -1.5  1.5  2.7
 
-  "申"字形 = 中央 3×3 的 L2 方框 + 东西各一块 700×700 的短翼。
-  两翼和 L2 同高（都压平到 z=0），通体一个平面。
+  翼尺寸说明：原来 0.7 太小（车 0.6 刚好卡进去），改成 0.8 后 A* 仍然进不去 ——
+  inscribed_radius=0.45 要求车中心离墙 0.45，翼内宽 0.7 扣掉两侧 0.9 是负数，
+  翼内一个可通行格都没有（nearest_free 会把目标一路吸附回 L2 里）。
+
+  所以取 1.2×1.2：内宽 1.10，可通行带 1.10 − 2×0.45 = 0.20 m，车能进也能转。
+  （1.0 是理论临界，实际只剩 1 个栅格能过，太勉强。）
 
   中央基座：规则里的固定设施 Ø270 × 高 800，位于 (0,0)。
-
-  车起点 (-1.0, 0)，朝东，在 L2 内部西侧，向两翼都能走。
-  （不放在西翼里：0.7 m 的翼对 0.6 m 的车太挤，起步容易蹭墙）
-
+  车起点 (-1.0, 0)，朝东。
   没有动态障碍：mujoco_node 找不到 obstacle_l1/l2 会 warning 后跳过。
 
-  配套地图：maps/l2_arena.yaml（4.4 × 3.0 m，origin [-2.2,-1.5]，res 0.05）
+  配套地图：maps/l2_arena.yaml（5.50 × 3.10 m，origin [-2.75,-1.55]，res 0.05）
 -->
 <mujoco model="l2_arena">
   <compiler angle="radian" meshdir="meshes" autolimits="true" balanceinertia="true" />
@@ -34,11 +35,10 @@
   <worldbody>
     <light name="sun" pos="0 0 8" dir="0 0 -1" directional="true" castshadow="true"
            diffuse="0.55 0.55 0.55" specular="0.15 0.15 0.15" />
-    <camera name="camera_top"   pos="0.00 0.00 7.00" quat="1 0 0 0" fovy="50" />
-    <camera name="camera_sw"    pos="-4.00 -4.00 3.50" xyaxes="0.707107 -0.707107 0.000000 0.324132 0.324132 0.888750" fovy="45" />
-    <camera name="camera_south" pos="0.00 -5.20 2.00" xyaxes="1.000000 -0.000000 0.000000 0.000000 0.263976 0.964529" fovy="45" />
+    <camera name="camera_top"   pos="0.00 0.00 7.50" quat="1 0 0 0" fovy="50" />
+    <camera name="camera_sw"    pos="-4.20 -4.20 3.60" xyaxes="0.707107 -0.707107 0.000000 0.324132 0.324132 0.888750" fovy="45" />
+    <camera name="camera_south" pos="0.00 -5.40 2.00" xyaxes="1.000000 -0.000000 0.000000 0.000000 0.263976 0.964529" fovy="45" />
 
-    <!-- 地面：一整块平面（墙把车围在"申"字轮廓里） -->
     <geom name="floor" type="plane" size="10 10 0.1"
           rgba="0.55 0.55 0.58 1" contype="0" conaffinity="0" condim="3" />
     <geom name="floor_collision" type="plane" size="10 10 0.1"
@@ -50,28 +50,27 @@
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
     <geom name="墙-南" type="box" size="1.5 0.025 0.25" pos="0 -1.5 0.25"
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
-    <geom name="墙-东-北" type="box" size="0.025 0.575 0.25" pos="1.5 0.925 0.25"
+    <geom name="墙-东-北" type="box" size="0.025 0.45 0.25" pos="1.5 1.05 0.25"
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
-    <geom name="墙-东-南" type="box" size="0.025 0.575 0.25" pos="1.5 -0.925 0.25"
+    <geom name="墙-东-南" type="box" size="0.025 0.45 0.25" pos="1.5 -1.05 0.25"
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
-    <geom name="墙-西-北" type="box" size="0.025 0.575 0.25" pos="-1.5 0.925 0.25"
+    <geom name="墙-西-北" type="box" size="0.025 0.45 0.25" pos="-1.5 1.05 0.25"
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
-    <geom name="墙-西-南" type="box" size="0.025 0.575 0.25" pos="-1.5 -0.925 0.25"
+    <geom name="墙-西-南" type="box" size="0.025 0.45 0.25" pos="-1.5 -1.05 0.25"
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
-    <geom name="墙-东翼-北" type="box" size="0.35 0.025 0.25" pos="1.85 0.35 0.25"
+    <geom name="墙-东翼-北" type="box" size="0.6000000000000001 0.025 0.25" pos="2.1 0.6 0.25"
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
-    <geom name="墙-东翼-南" type="box" size="0.35 0.025 0.25" pos="1.85 -0.35 0.25"
+    <geom name="墙-东翼-南" type="box" size="0.6000000000000001 0.025 0.25" pos="2.1 -0.6 0.25"
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
-    <geom name="墙-东翼-端" type="box" size="0.025 0.35 0.25" pos="2.2 0 0.25"
+    <geom name="墙-东翼-端" type="box" size="0.025 0.6 0.25" pos="2.7 0 0.25"
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
-    <geom name="墙-西翼-北" type="box" size="0.35 0.025 0.25" pos="-1.85 0.35 0.25"
+    <geom name="墙-西翼-北" type="box" size="0.6000000000000001 0.025 0.25" pos="-2.1 0.6 0.25"
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
-    <geom name="墙-西翼-南" type="box" size="0.35 0.025 0.25" pos="-1.85 -0.35 0.25"
+    <geom name="墙-西翼-南" type="box" size="0.6000000000000001 0.025 0.25" pos="-2.1 -0.6 0.25"
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
-    <geom name="墙-西翼-端" type="box" size="0.025 0.35 0.25" pos="-2.2 0 0.25"
+    <geom name="墙-西翼-端" type="box" size="0.025 0.6 0.25" pos="-2.7 0 0.25"
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
 
-    <!-- 中央基座：Ø270 × 高 800 -->
     <geom name="center_base" type="cylinder" size="0.135 0.4" pos="0 0 0.4"
           rgba="0.75 0.70 0.20 1" contype="1" conaffinity="1" condim="3"
           friction="1.0 0.005 0.0001" />
