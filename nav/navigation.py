@@ -235,7 +235,10 @@ class Navigation:
         #   a=5.0 时 gap=1.85 就满速了，把 full_gap 提到 3.0 也毫无效果；
         #   a=3.0 时 gap 要到 3.0 才满速，这才真的把预警范围拉开。
         self.dyn_stop_gap = 0.25     # [m] 净间隙降到这个值 → 速度 0
-        self.dyn_full_gap = 3.00     # [m] 净间隙超过这个值 → 不限制
+        # 外圈（预警）范围：3.00 → 2.00，因为 dv_max=3.0 时从 4 m/s 刹停
+        # 只需 4²/(2·3) = 2.67 m，2 m 的预警圈配合 0.25 m 的刹车圈已经够用。
+        # 内圈（dyn_stop_gap=0.25）保持不变。
+        self.dyn_full_gap = 2.00     # [m] 净间隙超过这个值 → 不限制
         self.dyn_brake_a = 3.0       # [m/s²] 限速曲线用的等效减速度
         self.obstacle_clearance = 0.05       # 兼容旧字段，已不参与膨胀计算
 
