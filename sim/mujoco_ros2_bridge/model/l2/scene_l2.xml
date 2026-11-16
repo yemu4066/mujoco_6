@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- L2 对抗专用场景（俯视平面布局，无高度差）
+
+  取 rc2027 的 L1 范围（6×6 m）单独抽出来，模拟红蓝双方在 L2 公共区的对抗。
+  为适配"上不了台阶"的车，把 L1/L2 全部压平到地面，台阶换成等宽平地。
+
+  平面布局（北在上，x 向东，y 向北）：
+
+      y=+3  ┌─────────────────────────┐
+            │                         │
+      y= 1.5│      ┌───────────┐      │   ← L2 南北墙
+            │      │           │      │
+      y= 0.9│──────┤    L2     ├──────│   ← 东西走廊（唯一可通行）
+            │      │   3×3     │      │
+      y=-0.9│──────┤           ├──────│
+            │      └───────────┘      │
+      y=-1.5│                         │
+            │                         │
+      y=-3  └─────────────────────────┘
+           x=-3   x=-1.5    x=1.5   x=3
+
+  "申"字形 = 中央 3×3 的 L2 方框 + 东西两条贯穿走廊。
+  南北半场（|y|>1.5）被墙封死，进不去 —— 对应规则里"双方只能通过各自侧
+  的台阶进入 L2"（实车从西/东走廊进入，红蓝各占一侧）。
+
+  中央基座：规则里的固定设施（Ø270 × 高 800），保留为中央障碍。
+
+  没有动态障碍：mujoco_node 找不到 obstacle_l1/l2 会打印 warning 后跳过。
+
+  配套地图：maps/l2_arena.yaml（6×6，origin [-3,-3]，res 0.05）
+-->
+<mujoco model="l2_arena">
+  <compiler angle="radian" meshdir="meshes" autolimits="true" balanceinertia="true" />
+  <option timestep="0.001" gravity="0 0 -9.81" iterations="100" tolerance="1e-12" />
+
+  <asset>
+  </asset>
+
+  <worldbody>
+    <light name="sun" pos="0 0 12" dir="0 0 -1" directional="true" castshadow="true"
+           diffuse="0.55 0.55 0.55" specular="0.15 0.15 0.15" />
+    <camera name="camera_top"   pos="0.00 0.00 9.00" quat="1 0 0 0" fovy="45" />
+    <camera name="camera_sw"    pos="-5.00 -5.00 4.50" xyaxes="0.707107 -0.707107 0.000000 0.324132 0.324132 0.888750" fovy="45" />
+    <camera name="camera_south" pos="0.00 -6.50 2.20" xyaxes="1.000000 -0.000000 0.000000 0.000000 0.263976 0.964529" fovy="45" />
+
+    <!-- 地面 6×6：视觉 + 碰撞两层 -->
+    <geom name="floor" type="plane" size="3 3 0.1"
+          rgba="0.55 0.55 0.58 1" contype="0" conaffinity="0" condim="3" />
+    <geom name="floor_collision" type="plane" size="3 3 0.1"
+          rgba="0 0 0 0" contype="1" conaffinity="1" condim="3"
+          friction="1.0 0.005 0.0001" />
+
+    <geom name="wall_w" type="box" size="0.025 3 0.25" pos="-3 0 0.25"
+          rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
+    <geom name="wall_e" type="box" size="0.025 3 0.25" pos=" 3 0 0.25"
+          rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
+    <geom name="wall_s" type="box" size="3 0.025 0.25" pos="0 -3 0.25"
+          rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
+    <geom name="wall_n" type="box" size="3 0.025 0.25" pos="0  3 0.25"
+          rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
+    <geom name="wall_l2_s" type="box" size="1.5 0.025 0.25" pos="0 -1.5 0.25"
+          rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
+    <geom name="wall_l2_n" type="box" size="1.5 0.025 0.25" pos="0  1.5 0.25"
+          rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
+    <geom name="wall_corr_s_-" type="box" size="0.75 0.025 0.25" pos="-2.25 -0.9 0.25"
+          rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
+    <geom name="wall_corr_n_-" type="box" size="0.75 0.025 0.25" pos="-2.25  0.9 0.25"
+          rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
+    <geom name="wall_corr_s_+" type="box" size="0.75 0.025 0.25" pos="2.25 -0.9 0.25"
+          rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
+    <geom name="wall_corr_n_+" type="box" size="0.75 0.025 0.25" pos="2.25  0.9 0.25"
+          rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
+
+    <!-- 中央基座：规则里的固定设施，Ø270 × 高 800 -->
+    <geom name="center_base" type="cylinder" size="0.135 0.4" pos="0 0 0.4"
+          rgba="0.75 0.70 0.20 1" contype="1" conaffinity="1" condim="3"
+          friction="1.0 0.005 0.0001" />
+
+    <body name="chassis" pos="-2.6 0 0.235" quat="1 0 0 0">
+        <freejoint name="root"/>
+
+        <geom name="chassis_visual_main" type="box" size="0.300 0.300 0.08" pos="0 0 -0.0" rgba="0.8 0.3 0.3 1" contype="0" conaffinity="0" mass="0"/>
+        <!-- <geom name="chassis_visual_top" type="box" size="0.38 0.38 0.01" pos="0 0 0.06" rgba="0.6 0.2 0.2 1" contype="0" conaffinity="0" mass="0"/> -->
+
+        <!-- <geom name="chassis_visual_center" type="box" size="0.4 0.4 0.04" pos="-0.02 0 0" rgba="0.8 0.3 0.3 1" contype="0" conaffinity="0" mass="0"/> -->
+        <!-- <geom name="chassis_visual_rear" type="box" size="0.16 0.14 0.03" pos="-0.18 0 0.04" rgba="0.8 0.3 0.3 1" contype="0" conaffinity="0" mass="0"/> -->
+        <geom name="chassis_mass" type="box" size="0.30 0.20 0.04" pos="0.10 0.03 -0.05" rgba="0.8 0.3 0.3 0" mass="16" contype="0" conaffinity="0"/>
+        <!-- 与 650 视觉方块一致的碰撞体：参与物理碰撞，解决“车身穿墙” -->
+        <geom name="chassis_collision" type="box" size="0.300 0.300 0.08" pos="0 0 -0.02"
+              rgba="0 0 0 0" mass="0" contype="1" conaffinity="1" group="1"
+              solref="0.02 1" solimp="0.9 0.95 0.001"/>
+        <body name="wheel0_pivot" pos="0.24 0.24 -0.093">
+            <joint name="wheel0_steer" type="hinge" axis="0 0 1" damping="2.0" armature="0.01"/>
+            <geom type="cylinder" size="0.04 0.02" rgba="0.3 0.3 0.8 1" mass="0.5" contype="0" conaffinity="0"/>
+            <body name="wheel0" pos="0 0 -0.058">
+                <joint name="wheel0_drive" type="hinge" axis="0 1 0" damping="2.0" armature="0.05"/>
+                <geom type="cylinder" size="0.058 0.02" zaxis="0 1 0" rgba="0.2 0.2 0.2 1" friction="2.5 0.01 0.005" mass="1.0" contype="1" conaffinity="1"/>
+            </body>
+        </body>
+
+        <body name="wheel1_pivot" pos="0.24 -0.24 -0.093">
+            <joint name="wheel1_steer" type="hinge" axis="0 0 1" damping="2.0" armature="0.01"/>
+            <geom type="cylinder" size="0.04 0.02" rgba="0.3 0.3 0.8 1" mass="0.5" contype="0" conaffinity="0"/>
+            <body name="wheel1" pos="0 0 -0.058">
+                <joint name="wheel1_drive" type="hinge" axis="0 1 0" damping="2.0" armature="0.05"/>
+                <geom type="cylinder" size="0.058 0.02" zaxis="0 1 0" rgba="0.2 0.2 0.2 1" friction="2.5 0.01 0.005" mass="1.0" contype="1" conaffinity="1"/>
+            </body>
+        </body>
+
+        <body name="wheel2_pivot" pos="-0.24 0.24 -0.093">
+            <joint name="wheel2_steer" type="hinge" axis="0 0 1" damping="2.0" armature="0.01"/>
+            <geom type="cylinder" size="0.04 0.02" rgba="0.3 0.3 0.8 1" mass="0.5" contype="0" conaffinity="0"/>
+            <body name="wheel2" pos="0 0 -0.058">
+                <joint name="wheel2_drive" type="hinge" axis="0 1 0" damping="2.0" armature="0.05"/>
+                <geom type="cylinder" size="0.058 0.02" zaxis="0 1 0" rgba="0.2 0.2 0.2 1" friction="2.5 0.01 0.005" mass="1.0" contype="1" conaffinity="1"/>
+            </body>
+        </body>
+
+        <body name="wheel3_pivot" pos="-0.24 -0.24 -0.093">
+            <joint name="wheel3_steer" type="hinge" axis="0 0 1" damping="2.0" armature="0.01"/>
+            <geom type="cylinder" size="0.04 0.02" rgba="0.3 0.3 0.8 1" mass="0.5" contype="0" conaffinity="0"/>
+            <body name="wheel3" pos="0 0 -0.058">
+                <joint name="wheel3_drive" type="hinge" axis="0 1 0" damping="2.0" armature="0.05"/>
+                <geom type="cylinder" size="0.058 0.02" zaxis="0 1 0" rgba="0.2 0.2 0.2 1" friction="2.5 0.01 0.005" mass="1.0" contype="1" conaffinity="1"/>
+            </body>
+        </body>
+
+        <geom name="head_marker" type="box" size="0.05 0.2 0.01" pos="0.27 0 0.085" rgba="0 1 0 1" contype="0" conaffinity="0" mass="0"/>
+    </body>
+  </worldbody>
+
+  <contact>
+    <exclude body1="chassis" body2="wheel0_pivot"/>
+    <exclude body1="chassis" body2="wheel1_pivot"/>
+    <exclude body1="chassis" body2="wheel2_pivot"/>
+    <exclude body1="chassis" body2="wheel3_pivot"/>
+    <exclude body1="chassis" body2="wheel0"/>
+    <exclude body1="chassis" body2="wheel1"/>
+    <exclude body1="chassis" body2="wheel2"/>
+    <exclude body1="chassis" body2="wheel3"/>
+  </contact>
+
+  <actuator>
+    <position joint="wheel0_steer" name="steer0" kp="50" forcerange="-300 300"/>
+    <velocity joint="wheel0_drive" name="drive0" kv="40" forcerange="-180 180"/>
+    <position joint="wheel1_steer" name="steer1" kp="50" forcerange="-300 300"/>
+    <velocity joint="wheel1_drive" name="drive1" kv="40" forcerange="-180 180"/>
+    <position joint="wheel2_steer" name="steer2" kp="50" forcerange="-300 300"/>
+    <velocity joint="wheel2_drive" name="drive2" kv="40" forcerange="-180 180"/>
+    <position joint="wheel3_steer" name="steer3" kp="50" forcerange="-300 300"/>
+    <velocity joint="wheel3_drive" name="drive3" kv="40" forcerange="-180 180"/>
+  </actuator>
+</mujoco>
