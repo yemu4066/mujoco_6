@@ -1,33 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- L2 对抗专用场景（俯视平面布局，无高度差）
+<!-- L2 对抗专用场景（"申"字形，全部压平到地面层）
 
-  取 rc2027 的 L1 范围（6×6 m）单独抽出来，模拟红蓝双方在 L2 公共区的对抗。
-  为适配"上不了台阶"的车，把 L1/L2 全部压平到地面，台阶换成等宽平地。
+  只保留 L2 公共区，把 L1 整圈删掉。平面布局（北在上）：
 
-  平面布局（北在上，x 向东，y 向北）：
+              y=+1.5  ┌───────────┐
+                      │           │
+              y=+0.35 ┌────┤   L2   ├────┐
+                      │ 西 │  3×3   │ 东 │    ← 东西两翼 700×700
+              y=-0.35 └────┤        ├────┘
+                      │           │
+              y=-1.5  └───────────┘
+                     x=-2.2  -1.5  1.5  2.2
 
-      y=+3  ┌─────────────────────────┐
-            │                         │
-      y= 1.5│      ┌───────────┐      │   ← L2 南北墙
-            │      │           │      │
-      y= 0.9│──────┤    L2     ├──────│   ← 东西走廊（唯一可通行）
-            │      │   3×3     │      │
-      y=-0.9│──────┤           ├──────│
-            │      └───────────┘      │
-      y=-1.5│                         │
-            │                         │
-      y=-3  └─────────────────────────┘
-           x=-3   x=-1.5    x=1.5   x=3
+  "申"字形 = 中央 3×3 的 L2 方框 + 东西各一块 700×700 的短翼。
+  两翼和 L2 同高（都压平到 z=0），通体一个平面。
 
-  "申"字形 = 中央 3×3 的 L2 方框 + 东西两条贯穿走廊。
-  南北半场（|y|>1.5）被墙封死，进不去 —— 对应规则里"双方只能通过各自侧
-  的台阶进入 L2"（实车从西/东走廊进入，红蓝各占一侧）。
+  中央基座：规则里的固定设施 Ø270 × 高 800，位于 (0,0)。
 
-  中央基座：规则里的固定设施（Ø270 × 高 800），保留为中央障碍。
+  车起点 (-1.0, 0)，朝东，在 L2 内部西侧，向两翼都能走。
+  （不放在西翼里：0.7 m 的翼对 0.6 m 的车太挤，起步容易蹭墙）
 
-  没有动态障碍：mujoco_node 找不到 obstacle_l1/l2 会打印 warning 后跳过。
+  没有动态障碍：mujoco_node 找不到 obstacle_l1/l2 会 warning 后跳过。
 
-  配套地图：maps/l2_arena.yaml（6×6，origin [-3,-3]，res 0.05）
+  配套地图：maps/l2_arena.yaml（4.4 × 3.0 m，origin [-2.2,-1.5]，res 0.05）
 -->
 <mujoco model="l2_arena">
   <compiler angle="radian" meshdir="meshes" autolimits="true" balanceinertia="true" />
@@ -37,46 +32,51 @@
   </asset>
 
   <worldbody>
-    <light name="sun" pos="0 0 12" dir="0 0 -1" directional="true" castshadow="true"
+    <light name="sun" pos="0 0 8" dir="0 0 -1" directional="true" castshadow="true"
            diffuse="0.55 0.55 0.55" specular="0.15 0.15 0.15" />
-    <camera name="camera_top"   pos="0.00 0.00 9.00" quat="1 0 0 0" fovy="45" />
-    <camera name="camera_sw"    pos="-5.00 -5.00 4.50" xyaxes="0.707107 -0.707107 0.000000 0.324132 0.324132 0.888750" fovy="45" />
-    <camera name="camera_south" pos="0.00 -6.50 2.20" xyaxes="1.000000 -0.000000 0.000000 0.000000 0.263976 0.964529" fovy="45" />
+    <camera name="camera_top"   pos="0.00 0.00 7.00" quat="1 0 0 0" fovy="50" />
+    <camera name="camera_sw"    pos="-4.00 -4.00 3.50" xyaxes="0.707107 -0.707107 0.000000 0.324132 0.324132 0.888750" fovy="45" />
+    <camera name="camera_south" pos="0.00 -5.20 2.00" xyaxes="1.000000 -0.000000 0.000000 0.000000 0.263976 0.964529" fovy="45" />
 
-    <!-- 地面 6×6：视觉 + 碰撞两层 -->
-    <geom name="floor" type="plane" size="3 3 0.1"
+    <!-- 地面：一整块平面（墙把车围在"申"字轮廓里） -->
+    <geom name="floor" type="plane" size="10 10 0.1"
           rgba="0.55 0.55 0.58 1" contype="0" conaffinity="0" condim="3" />
-    <geom name="floor_collision" type="plane" size="3 3 0.1"
+    <geom name="floor_collision" type="plane" size="10 10 0.1"
           rgba="0 0 0 0" contype="1" conaffinity="1" condim="3"
           friction="1.0 0.005 0.0001" />
 
-    <geom name="wall_w" type="box" size="0.025 3 0.25" pos="-3 0 0.25"
+    <!-- ===== "申"字轮廓墙 ===== -->
+    <geom name="墙-北" type="box" size="1.5 0.025 0.25" pos="0 1.5 0.25"
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
-    <geom name="wall_e" type="box" size="0.025 3 0.25" pos=" 3 0 0.25"
+    <geom name="墙-南" type="box" size="1.5 0.025 0.25" pos="0 -1.5 0.25"
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
-    <geom name="wall_s" type="box" size="3 0.025 0.25" pos="0 -3 0.25"
+    <geom name="墙-东-北" type="box" size="0.025 0.575 0.25" pos="1.5 0.925 0.25"
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
-    <geom name="wall_n" type="box" size="3 0.025 0.25" pos="0  3 0.25"
+    <geom name="墙-东-南" type="box" size="0.025 0.575 0.25" pos="1.5 -0.925 0.25"
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
-    <geom name="wall_l2_s" type="box" size="1.5 0.025 0.25" pos="0 -1.5 0.25"
+    <geom name="墙-西-北" type="box" size="0.025 0.575 0.25" pos="-1.5 0.925 0.25"
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
-    <geom name="wall_l2_n" type="box" size="1.5 0.025 0.25" pos="0  1.5 0.25"
+    <geom name="墙-西-南" type="box" size="0.025 0.575 0.25" pos="-1.5 -0.925 0.25"
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
-    <geom name="wall_corr_s_-" type="box" size="0.75 0.025 0.25" pos="-2.25 -0.9 0.25"
+    <geom name="墙-东翼-北" type="box" size="0.35 0.025 0.25" pos="1.85 0.35 0.25"
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
-    <geom name="wall_corr_n_-" type="box" size="0.75 0.025 0.25" pos="-2.25  0.9 0.25"
+    <geom name="墙-东翼-南" type="box" size="0.35 0.025 0.25" pos="1.85 -0.35 0.25"
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
-    <geom name="wall_corr_s_+" type="box" size="0.75 0.025 0.25" pos="2.25 -0.9 0.25"
+    <geom name="墙-东翼-端" type="box" size="0.025 0.35 0.25" pos="2.2 0 0.25"
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
-    <geom name="wall_corr_n_+" type="box" size="0.75 0.025 0.25" pos="2.25  0.9 0.25"
+    <geom name="墙-西翼-北" type="box" size="0.35 0.025 0.25" pos="-1.85 0.35 0.25"
+          rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
+    <geom name="墙-西翼-南" type="box" size="0.35 0.025 0.25" pos="-1.85 -0.35 0.25"
+          rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
+    <geom name="墙-西翼-端" type="box" size="0.025 0.35 0.25" pos="-2.2 0 0.25"
           rgba="0.35 0.35 0.40 1" contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"/>
 
-    <!-- 中央基座：规则里的固定设施，Ø270 × 高 800 -->
+    <!-- 中央基座：Ø270 × 高 800 -->
     <geom name="center_base" type="cylinder" size="0.135 0.4" pos="0 0 0.4"
           rgba="0.75 0.70 0.20 1" contype="1" conaffinity="1" condim="3"
           friction="1.0 0.005 0.0001" />
 
-    <body name="chassis" pos="-2.6 0 0.235" quat="1 0 0 0">
+    <body name="chassis" pos="-1.0 0 0.235" quat="1 0 0 0">
         <freejoint name="root"/>
 
         <geom name="chassis_visual_main" type="box" size="0.300 0.300 0.08" pos="0 0 -0.0" rgba="0.8 0.3 0.3 1" contype="0" conaffinity="0" mass="0"/>

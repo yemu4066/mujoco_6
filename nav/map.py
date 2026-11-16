@@ -58,7 +58,10 @@ def _read_pgm(path: pathlib.Path) -> np.ndarray:
             idx += 1
         tokens.append(data[start:idx])
     idx += 1
-    height, width = int(tokens[1]), int(tokens[2])
+    # PGM(P5) 头部是 "P5 <width> <height> <maxval>"，注意**宽在前**。
+    # 原来写成 (tokens[1], tokens[2]) = (height, width)，宽高对调了。
+    # 正方形地图（如 rc2027.pgm 224×224）看不出来，非正方形就整张错位。
+    width, height = int(tokens[1]), int(tokens[2])
     return np.frombuffer(data[idx:], dtype=np.uint8).reshape(height, width)
 
 
