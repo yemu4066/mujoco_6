@@ -69,18 +69,7 @@ class NavNode(Node):
         if not mp.exists():
             raise FileNotFoundError(f'找不到地图: {map_yaml}（已尝试 {mp}）')
         self.map_path = mp
-        # 场地差别很大：rc2027 是 11×11，L2 对抗场只有 5.5×3.1。
-        # dynamic_inflate_radius 是「把动态障碍周围当 LETHAL 的半径」——
-        # 1.40 在大场地合适，在 3 m 宽的 L2 里几乎糊满全场，A* 直接无解。
-        # block_threshold 必须比它小，否则 A* 刚绕完又判挡路，每帧重规划。
-        gp = lambda n: self.get_parameter(n).value    # noqa: E731
-        self.declare_parameter('dynamic_inflate_radius', 1.40)
-        self.declare_parameter('block_threshold', 1.10)
-        self.nav = Navigation(
-            str(mp),
-            dynamic_inflate_radius=float(gp('dynamic_inflate_radius')),
-            block_threshold=float(gp('block_threshold')),
-        )
+        self.nav = Navigation(str(mp))
         self.get_logger().info(f'使用地图: {mp.name}')
         self.get_logger().info('导航库已初始化')
 

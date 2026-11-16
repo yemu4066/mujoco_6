@@ -46,8 +46,6 @@ class Navigation:
                  car_width: float = 0.60,
                  inscribed_radius: float = 0.45,
                  inflation_radius: float = 0.90,
-                 dynamic_inflate_radius: float = 1.40,
-                 block_threshold: float | None = None,
                  cost_weight: float = 2.0,
                  ref_speed: float = 4.0,
                  mpc_dt: float = 0.01,
@@ -214,19 +212,15 @@ class Navigation:
         # 路径反复变化反而让车走不稳。放大后 A* 主动绕远，给运动留出缓冲。
         #
         # 1.40 m + 方块外接圆 0.46 m ⇒ 车中心离对方中心至少 1.86 m。
-        # ⚠ 通道宽度 < 2 × 这个值 时 A* 可能无解。
-        #   11×11 的 rc2027 用 1.40 没问题；
-        #   5.5×3.1 的 L2 对抗场得降到 0.40，否则对方车一出现全场都成禁区。
-        self.dynamic_inflate_radius = float(dynamic_inflate_radius)   # [m]
+        # ⚠ 通道宽度 < 2 × 1.40 = 2.8 m 时 A* 可能无解。
+        #   空白场（20×20）没问题；换到窄场地把它调小到 0.80 左右。
+        self.dynamic_inflate_radius = 1.40   # [m]
         # 触发重规划的距离（**从障碍表面算**，即到 _dynamic_points 的最近距离）。
         # 换成从障碍几何中心算 = 它 + 障碍外接圆半径（仿真方块 0.46 m）。
         #     1.10 + 0.46 = 1.56 m   ← 从中心算 1.56 m 内有障碍就重规划
-        # 必须保持 < dynamic_inflate_radius，
+        # 必须保持 < dynamic_inflate_radius(1.40)，
         # 否则 A* 绕完立刻又判挡路 → 每 0.25 s 重规划一次 → 路径乱变。
-        # 不传就按 dynamic_inflate_radius 的 0.79 倍取（1.40 → 1.10，与旧值一致）。
-        self.block_threshold = (float(block_threshold)
-                                if block_threshold is not None
-                                else 0.79 * self.dynamic_inflate_radius)
+        self.block_threshold = 1.10
         # ---- 动态障碍距离限速（离得越近越慢）----
         # 用的是「车体外缘到障碍表面的净间隙」 gap = d(车中心,障碍点) - car_sweep_radius。
         # 速度按制动距离公式给出：  v = sqrt(2·a·(gap − stop_gap))
