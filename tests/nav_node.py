@@ -80,6 +80,10 @@ class NavNode(Node):
 
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.plan_pub = self.create_publisher(Path, '/plan', 10)
+        # 路径两侧的警戒边界（= dynamic_inflate_radius 的宽度），
+        # 用来调避障参数时直观看「A* 会给障碍留多宽的走廊」。
+        self.corridor_pub = self.create_publisher(MarkerArray, '/plan_corridor', 10)
+        self._plan_version_sent = -1
         self.map_pub = self.create_publisher(OccupancyGrid, '/costmap', map_qos)
         # 手动障碍可视化：Foxglove 里加完能看见在哪儿
         self.debug_obs_pub = self.create_publisher(
@@ -156,20 +160,68 @@ class NavNode(Node):
             f'yaw {math.degrees(yaw):.0f}°，开始跟踪')
 
         # 发布路径供可视化
+        self._publish_plan(reason='首次规划')
+        self._plan_version_sent = getattr(self.nav, 'path_version', 1)
+
+    def _publish_plan(self, reason: str = '') -> None:
+        """把当前规划路径 + 两侧警戒边界发到 Foxglove。
+
+        警戒带宽度 = navigation.dynamic_inflate_radius，
+        即 A* 保证「路径离障碍边缘至少这么远」。调这个参数时看它最直观。
+        """
         path = self.nav.path
-        if path is not None:
-            p = Path()
-            p.header.frame_id = 'map'
-            p.header.stamp = self.get_clock().now().to_msg()
-            for x, y in path:
-                ps = PoseStamped()
-                ps.header = p.header
-                ps.pose.position.x = float(x)
-                ps.pose.position.y = float(y)
-                ps.pose.orientation.w = 1.0
-                p.poses.append(ps)
-            self.plan_pub.publish(p)
-            self.get_logger().info(f'/plan 已发布 {len(path)} 点')
+        if path is None or len(path) < 2:
+            return
+        now = self.get_clock().now().to_msg()
+
+        # ---- /plan：中心线 ----
+        p = Path()
+        p.header.frame_id = 'map'
+        p.header.stamp = now
+        for x, y in path:
+            ps = PoseStamped()
+            ps.header = p.header
+            ps.pose.position.x = float(x)
+            ps.pose.position.y = float(y)
+            ps.pose.orientation.w = 1.0
+            p.poses.append(ps)
+        self.plan_pub.publish(p)
+
+        # ---- /plan_corridor：两侧警戒边界 ----
+        pts = np.asarray(path, dtype=float)
+        # 切线用中心差分（端点用单边）
+        tx = np.gradient(pts[:, 0])
+        ty = np.gradient(pts[:, 1])
+        norm = np.hypot(tx, ty)
+        norm[norm < 1e-9] = 1.0
+        nx, ny = -ty / norm, tx / norm        # 左法向
+
+        r = float(getattr(self.nav, 'dynamic_inflate_radius', 0.5))
+        arr = MarkerArray()
+        for sign, color, mid in ((+1.0, (1.0, 0.35, 0.10, 0.9), 0),
+                                 (-1.0, (1.0, 0.35, 0.10, 0.9), 1)):
+            m = Marker()
+            m.header.frame_id = 'map'
+            m.header.stamp = now
+            m.ns = 'corridor'
+            m.id = mid
+            m.type = Marker.LINE_STRIP
+            m.action = Marker.ADD
+            m.pose.orientation.w = 1.0
+            m.scale.x = 0.02
+            m.color.r, m.color.g, m.color.b, m.color.a = color
+            for k in range(len(pts)):
+                pt = Point()
+                pt.x = float(pts[k, 0] + sign * r * nx[k])
+                pt.y = float(pts[k, 1] + sign * r * ny[k])
+                pt.z = 0.02
+                m.points.append(pt)
+            arr.markers.append(m)
+        self.corridor_pub.publish(arr)
+
+        self.get_logger().info(
+            f'/plan 已发布 {len(path)} 点（走廊宽度 {r:.2f} m）'
+            + (f' · {reason}' if reason else ''))
 
     def _on_scan(self, msg: LaserScan) -> None:
         """真机激光雷达：原样交给库处理（库内部做坐标转换）。"""
@@ -398,6 +450,13 @@ class NavNode(Node):
 
         if self.nav.phase == 'IDLE':
             return
+
+        # 路径在重规划后会变，版本号一变就重发 /plan + /plan_corridor，
+        # 否则 Foxglove 里永远停在第一次 A* 的结果。
+        ver = getattr(self.nav, 'path_version', None)
+        if ver is not None and ver != self._plan_version_sent:
+            self._plan_version_sent = ver
+            self._publish_plan(reason='重规划' if ver > 1 else '首次规划')
 
         cmd = self.nav.update(*self.pose)
         t = Twist()

@@ -252,6 +252,8 @@ class Navigation:
         self._phase = IDLE
         self._goal: tuple[float, float, float] | None = None
         self._path: np.ndarray | None = None
+        # 每次规划（含重规划）自增，供外部检测路径是否变了
+        self._path_version = 0
         self._raw_path: np.ndarray | None = None      # 平滑前的 A* 栅格路径
         self._blocked = False       # 当前是否因障碍无法前进
         # ---- 死锁脱困 ----
@@ -383,6 +385,7 @@ class Navigation:
 
         self._goal = (float(x), float(y), float(yaw))
         self._path = points
+        self._path_version += 1
         self._kick_frames = 0
 
         self._build_speed_profile(points)
@@ -972,6 +975,14 @@ class Navigation:
     def path(self) -> np.ndarray | None:
         """最近一次的规划路径 (N, 2)，供可视化用（平滑后）。"""
         return self._path
+
+    @property
+    def path_version(self) -> int:
+        """路径版本号：每次 set_goal（含重规划）都会 +1。
+
+        外部可视化节点轮询它判断「路径是否变了」，变了就重发 /plan。
+        """
+        return self._path_version
 
     @property
     def raw_path(self) -> np.ndarray | None:
