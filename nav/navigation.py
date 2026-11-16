@@ -217,10 +217,13 @@ class Navigation:
         self.dynamic_inflate_radius = 1.40   # [m]
         # 触发重规划的距离（**从障碍表面算**，即到 _dynamic_points 的最近距离）。
         # 换成从障碍几何中心算 = 它 + 障碍外接圆半径（仿真方块 0.46 m）。
-        #     1.10 + 0.46 = 1.56 m   ← 从中心算 1.56 m 内有障碍就重规划
+        #     0.60 + 0.46 = 1.06 m   ← 从中心算 1.06 m 内有障碍就重规划
         # 必须保持 < dynamic_inflate_radius(1.40)，
         # 否则 A* 绕完立刻又判挡路 → 每 0.25 s 重规划一次 → 路径乱变。
-        self.block_threshold = 1.10
+        # 1.10 → 0.60：窄场地（L2 只有 3×3）里 1.10 太敏感，障碍还没真的挡路
+        # 就触发重规划，路径反复变。这个值只影响「什么时候重新规划」，
+        # 不影响 A* 给障碍留多宽（那是 dynamic_inflate_radius）。
+        self.block_threshold = 0.60
         # ---- 动态障碍距离限速（离得越近越慢）----
         # 用的是「车体外缘到障碍表面的净间隙」 gap = d(车中心,障碍点) - car_sweep_radius。
         # 速度按制动距离公式给出：  v = sqrt(2·a·(gap − stop_gap))
