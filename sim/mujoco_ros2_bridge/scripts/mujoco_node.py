@@ -57,7 +57,10 @@ class MujocoSimNode(Node):
         self.declare_parameter('obstacle_z_l1', 0.875)
         self.declare_parameter('obstacle_z_l2', 1.175)
         # 是否把场景里的可动比赛用品也作为障碍发布（它们会被机器人推动）
-        self.declare_parameter('publish_movable_objects', True)
+        # 默认 False：比赛用品属于静态地图，不该混进动态障碍流。
+        # 打开后 /obstacles 会多出几十个点（RC2027 有 53 个），
+        # 导航侧膨胀和距离限速会全场生效。
+        self.declare_parameter('publish_movable_objects', False)
         self.declare_parameter('obstacle_rate', 20.0)
         # 仿真里没有定位系统，用 identity 把 map 与 odom 接起来
         self.declare_parameter('publish_map_to_odom', True)

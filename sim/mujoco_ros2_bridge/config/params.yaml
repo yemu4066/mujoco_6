@@ -19,7 +19,13 @@ mujoco_node:
     # ---- 障碍发布 ----
     # 可动比赛用品（天空块/地块/五色石）也会作为障碍发布，
     # 这样被机器人推开后，代价地图的障碍层会自动更新。
-    publish_movable_objects: true
+    # 场地里的比赛用品（skyblock/earthblock/mustika，RC2027 有 53 个）
+    # 是否也当作动态障碍发到 /obstacles。
+    # 默认 false：它们是**静态地图的一部分**，该画在 rc2027.yaml 里；
+    # 混进动态障碍会让导航侧收到几百个点，膨胀 + 距离限速全开，
+    # 表现为"全程速度被压、A* 绕来绕去"。
+    # 只有真的需要"推箱子避障"时才打开。
+    publish_movable_objects: false
     obstacle_rate: 20.0
 
     # 仿真没有定位系统，用 identity 把 map 与 odom 接起来
