@@ -335,6 +335,13 @@ class AugmentedSwerveMPC(AcadosMPCBase):
     def _process_output(self, u_0, x_1):
         # 提取预测的下一步状态作为当前的底盘指令
         v_next, alpha_next, vw_next = x_1[3:6]
+        # 这里**绝对不要**对 alpha_next 做 atan2/归一化。
+        # 归一化会把 alpha 每帧瞬移回 [−π, π]，等于人为制造 ±π 跳变，
+        # MPC 认为 alpha 突变（违反 dα 约束），轨迹直接乱掉。
+        # 保持 alpha 连续累积，临界状态才会消失。
+        # （发给底盘时在下面的 a_out 里仍会归一到 [−π, π]，那是输出，
+        #   不影响内部状态。）
+        self.last_aug_state = np.array([v_next, alpha_next, vw_next])
 
         # ★ 规范化到 |alpha| <= 90°。
         #   运动学上 (v, α) 与 (−v, α∓180°) 完全等价（速度矢量相同），
@@ -352,25 +359,4 @@ class AugmentedSwerveMPC(AcadosMPCBase):
             a_out = math.atan2(math.sin(a_out), math.cos(a_out))
         else:
             v_out, a_out = v_next, alpha_next
-        cmd = np.array([v_out * math.cos(a_out), v_out * math.sin(a_out), vw_next])
-
-        # ---- 内部状态的 2π 回绕 ----
-        # alpha 的界是 ±20π，只作数值防爆。但 alpha 会单向累积：一直朝同一
-        # 方向转的话，满速 (dα=6 rad/s) 约 10.5 s 就顶到界上。顶住之后 MPC
-        # 想继续加 alpha 会被 lbx/ubx 挡住、只能往回减 —— 表现为「方向盘打死
-        # 了、转不动」，车顺着当时的朝向直冲出去。
-        #
-        # 回绕是**无损**的：alpha 与 alpha − 2π·k 是完全相同的轮向。
-        # dα 约束作用在控制量 u[1] 上，与状态 alpha 的绝对值无关，
-        # 所以一次性跳 2π 的整数倍不会被判成「alpha 突变」。
-        #
-        # 注意顺序：**先用原始 alpha_next 算完 cmd，再回绕要存的状态**。
-        # 反过来（先把 alpha 归一化、再从归一化值算输出）会让 a_out 跟着跳变。
-        if abs(alpha_next) > math.pi:
-            k = round(alpha_next / (2.0 * math.pi))
-            alpha_store = alpha_next - k * 2.0 * math.pi
-        else:
-            alpha_store = alpha_next
-        self.last_aug_state = np.array([v_next, alpha_store, vw_next])
-
-        return cmd
+        return np.array([v_out * math.cos(a_out), v_out * math.sin(a_out), vw_next])
