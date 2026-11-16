@@ -95,6 +95,13 @@ def generate_launch_description() -> LaunchDescription:
                     'opponent_wait_corner': 3.0,
                     # 这个场景没有台面，对手方块直接贴地
                     'obstacle_z_l1': 0.25,
+                    # ---- 小场地专用的规划半径 ----
+                    # dynamic_inflate_radius 是「对方车周围按 LETHAL 处理的半径」。
+                    # 这里只有 5.5×3.1 m，1.40 会糊满全场 → A* 无解；
+                    # 实测 0.45 是能绕开的临界，取 0.40 留点余量。
+                    'dynamic_inflate_radius': 0.40,
+                    # 必须比 dynamic_inflate_radius 小，否则刚绕完又判挡路
+                    'block_threshold': 0.30,
                 },
             ],
         ),
