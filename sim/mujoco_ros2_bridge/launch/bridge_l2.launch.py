@@ -87,6 +87,14 @@ def generate_launch_description() -> LaunchDescription:
                 {
                     'scene': ParameterValue(scene, value_type=str),
                     'use_viewer': ParameterValue(use_viewer, value_type=bool),
+                    # 对方小车在东翼和 L2 四角之间往返（时间表写死在
+                    # obstacle_motion.build_l2_timeline 里）
+                    'obstacle_motion_mode': 'l2_corners',
+                    'opponent_speed': 0.6,
+                    'opponent_wait_home': 10.0,
+                    'opponent_wait_corner': 3.0,
+                    # 这个场景没有台面，对手方块直接贴地
+                    'obstacle_z_l1': 0.25,
                 },
             ],
         ),

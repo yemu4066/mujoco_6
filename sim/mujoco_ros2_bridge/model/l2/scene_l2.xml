@@ -126,6 +126,16 @@
 
         <geom name="head_marker" type="box" size="0.05 0.2 0.01" pos="0.27 0 0.085" rgba="0 1 0 1" contype="0" conaffinity="0" mass="0"/>
     </body>
+    <!-- ===== 对方小车（mocap，仅视觉 + 真值发布，不参与物理碰撞）=====
+         0.65 × 0.65 方块，起点在东翼中心 (2.1, 0)。
+         运动由 mujoco_node 的 obstacle_motion_mode='l2_corners' 驱动：
+         东翼等 10 s → 匀速走到随机一个 L2 角（(±1.0, ±1.0)，不贴墙）→
+         停 3 s → 匀速走回东翼 → 循环。速度 0.6 m/s。 -->
+    <body name="obstacle_l1" mocap="true" pos="2.1 0 0.25">
+      <geom name="obstacle_l1_geom" type="box" size="0.325 0.325 0.25"
+            mass="5.0" rgba="1 0.20 0.20 0.85" contype="0" conaffinity="0" group="2" />
+    </body>
+
   </worldbody>
 
   <contact>

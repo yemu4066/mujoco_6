@@ -28,7 +28,8 @@ from rclpy.node import Node
 from nav_interfaces.msg import Obstacle, ObstacleArray
 from visualization_msgs.msg import Marker, MarkerArray
 
-from obstacle_motion import L1_PATROL, orbit_state, patrol_state
+from obstacle_motion import (L1_PATROL, build_l2_timeline, orbit_state,
+                            patrol_state, timeline_state)
 from odom_noise_node import OdomNoiseConfig, OdomNoiseGenerator
 from swerve_solver import SwerveSolver
 
@@ -48,6 +49,14 @@ class MujocoSimNode(Node):
         self.declare_parameter('obstacle_l1_speed', 0.5)
         self.declare_parameter('obstacle_l2_speed', 0.2)
         self.declare_parameter('obstacle_l2_orbit_radius', 0.85)
+        # 运动模式：
+        #   'legacy'     = L1 折线往返 + L2 绕圈（rc2027 场用）
+        #   'l2_corners' = 对方车在"东翼 ↔ L2 四角"之间往返（l2 对抗场用）
+        self.declare_parameter('obstacle_motion_mode', 'legacy')
+        # l2_corners 模式的节奏
+        self.declare_parameter('opponent_speed', 0.6)
+        self.declare_parameter('opponent_wait_home', 10.0)
+        self.declare_parameter('opponent_wait_corner', 3.0)
         self.declare_parameter('obstacle_height', 0.5)
         # 两个移动对手的 mocap 中心 z。
         # rc2027 里它们是「站在台面上的对手机器人」：L1 台面 0.625 + 半高 0.25
@@ -73,6 +82,14 @@ class MujocoSimNode(Node):
         self.obstacle_l1_speed = float(gp('obstacle_l1_speed').value)
         self.obstacle_l2_speed = float(gp('obstacle_l2_speed').value)
         self.obstacle_l2_orbit = float(gp('obstacle_l2_orbit_radius').value)
+        self.obstacle_motion_mode = str(gp('obstacle_motion_mode').value)
+        self.opponent_speed = float(gp('opponent_speed').value)
+        self.opponent_wait_home = float(gp('opponent_wait_home').value)
+        self.opponent_wait_corner = float(gp('opponent_wait_corner').value)
+        self._l2_segs, self._l2_total = build_l2_timeline(
+            cycles=60, speed=self.opponent_speed,
+            wait_home=self.opponent_wait_home,
+            wait_corner=self.opponent_wait_corner)
         self.obstacle_height = float(gp('obstacle_height').value)
         self.obstacle_z_l1 = float(gp('obstacle_z_l1').value)
         self.obstacle_z_l2 = float(gp('obstacle_z_l2').value)
@@ -238,6 +255,10 @@ class MujocoSimNode(Node):
         return radius
 
     def _obstacle_state(self, item: dict, t: float):
+        # l2 对抗场：对方车在东翼和 L2 四角之间往返（写死的时间表）
+        if self.obstacle_motion_mode == 'l2_corners':
+            return timeline_state(self._l2_segs, self._l2_total,
+                                  self.opponent_speed, t)
         if item['kind'] == 'l1':
             return patrol_state(L1_PATROL, self.obstacle_l1_speed, t)
         omega = self.obstacle_l2_speed / max(self.obstacle_l2_orbit, 1e-3)
