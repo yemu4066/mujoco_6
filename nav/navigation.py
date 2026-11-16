@@ -70,39 +70,27 @@ class Navigation:
         self.costmap = Costmap(data=cost, spec=base.spec)
         # 静态图保持不变；动态障碍叠加在副本上，不改原图
         self._static_cost = cost.copy()
-        # ★ inscribed_radius 的物理含义是"车体最坏朝向下的外接圆半径"，不是车宽一半。
-        #   车体 0.70x0.65 → 外接圆 0.478 m。车头锁死时车身可能斜 45° 移动，
-        #   此时需要 0.478；只有正交移动才是 0.325。
-        #   之前设 0.35/0.40 意味着 A* 认为"能走"的地方，车体实际侵入 13/8 cm ——
-        #   这是"过直角墙就撞"的根因，跟平滑无关。
+        # inscribed_radius 是「车体最坏朝向下的外接圆半径」，不是车宽的一半。
+        # 车头锁死时车身可能斜着走，此时需要的是外接圆而不是半宽；
+        # 取小了会让 A* 认为「能走」的地方车体实际侵入。
         self.inscribed_radius = float(inscribed_radius)
         self._inscribed_cells = max(1, int(round(inscribed_radius / base.spec.resolution)))
         self.cost_weight = float(cost_weight)
 
         # ---- 路径平滑 ----
-        # A* 是八邻域搜索，产物必然是 0/45/90° 的阶梯。CubicSpline 是**插值**，
-        # 会忠实复现这个阶梯 —— 实测最小曲率半径只有 2.6 cm，而车长 0.70 m，
-        # 物理上跟不出来（表现就是拐角处切内角、横向偏 15 cm）。
-        #
-        # 平滑器把阶梯换成"直线段 + 圆弧"，曲率能到 40~50 cm。三步：
+        # A* 是八邻域搜索，产物是 0/45/90° 的阶梯；CubicSpline 是插值，
+        # 会忠实复现阶梯（曲率半径只有几厘米），车跟不出来。
+        # 平滑器把阶梯换成「直线段 + 圆弧」，三步：
         #   ① 视线拉直 ② 圆弧倒角 ③ 5 cm 稠密重采样
-        # 圆弧上的每一点都检查离障 >= smooth_margin，窄处干脆不倒角。
+        # 圆弧上每一点都检查离障 >= margin，窄处干脆不倒角。
         #
-        # smooth_loss 是"允许平滑后比原路径再贴墙多少"。
-        # 两个方向都有代价，务必小心：
-        #   loss 大 → 圆弧能切得更狠、曲率更好，但实测撞墙。
-        #     对角任务 A* 离障 0.55 m，车头锁死斜 45° 扫掠半宽 0.477 m，
-        #     本来只剩 7 cm；loss=0.06 直接把余量吃到 2 cm，跟踪误差一上来就撞。
-        #   loss 小 → 保住了余量，但圆弧放不下，曲率只改善到 20 cm 左右。
+        # smooth_loss 是「允许平滑后比原路径再贴墙多少」：
+        #   大 → 圆弧能切得更狠、曲率更好，但余量被吃掉后一偏就撞；
+        #   小 → 保住余量，但圆弧放不下、曲率改善有限。
         #
-        # 实测（1.1 m 门 + 0.65 m 车）：
-        #   loss=0.06 → 离障 0.50 m  曲率 43 cm   ← 撞墙（实测）
-        #   loss=0.03 → 离障 0.55 m  曲率 35 cm
-        #   loss=0.00 → 离障 0.55 m  曲率 13 cm   ← 严格不劣化，保底方案
-        #
-        # ★ 直角拐角要特别注意：R 的圆弧在 90° 角上会往墙里切 0.414·R。
-        #   R=0.50 → 切 20.7 cm；R=0.35 → 切 14.5 cm。远大于 loss。
-        #   所以直角处的圆弧基本都会被拒（退化成尖角），这是**正确**的行为。
+        # 直角拐角注意：R 的圆弧在 90° 角上会往墙里切 0.414·R
+        # （R=0.50 → 20.7 cm），远大于 loss 量级，所以直角处的圆弧
+        # 基本都会被拒、退化成尖角 —— 这是正确行为。
         self.smooth_loss = float(smooth_loss)          # 允许比原路径再让出多少 [m]
         self.smooth_radius = float(smooth_radius)      # 圆弧半径 [m]
         self.smooth_adaptive = float(smooth_adaptive)   # 折点附近余量小于它就不倒角 [m]
@@ -115,10 +103,8 @@ class Navigation:
         self.car_length = float(car_length)
         self.car_width = float(car_width)
 
-        # ★ 车体外接圆半径 = 车头锁死、车身斜 45° 时需要的包络。
-        #   这才是"车体到障碍"真正要的距离，比车宽一半（0.325）大 47%。
-        #   限速的余量必须按它算，否则会高估 3 倍（实测：门处真实余量 7 cm，
-        #   而按车宽算出来是 22.5 cm，于是给了 0.75 m/s —— 一偏就撞）。
+        # 车体外接圆半径 = 车头锁死、车身斜着走时需要的包络。
+        # 「车体到障碍」要按它算，按车宽一半算会严重高估余量。
         self.car_sweep_radius = 0.5 * math.hypot(self.car_length, self.car_width)
 
         # 余量 = 到墙距离 − 车体外接圆 = **还能横向偏多少不碰车体**
@@ -167,31 +153,23 @@ class Navigation:
 
         # 最近一帧的横向偏差 [m]，正=偏左（路径法向）。供外部监控/可视化用。
         self.last_lateral = 0.0
-        # 转角限速：v <= sqrt(a_lat / kappa)。
-        # 参考点是按时间等距推进的，转角处路径弯曲而参考点"直线前进"，
-        # MPC 会在"贴路径"和"追参考点"之间反复权衡，表现为来回修正、绕圈。
+        # 曲率限速：v <= sqrt(a_lat / κ)。
+        # 参考点按时间等距推进，转角处路径弯曲而参考点「直线前进」，
+        # MPC 会在「贴路径」和「追参考点」之间反复权衡，表现为来回修正。
         # 按曲率把推进速度降下来，两者就不冲突了。
-        # 曲率限速：v <= sqrt(a_lat / κ)
-        # 原来设 100，导致 sqrt(100/2.85)=5.9 m/s，比限速上限还高 —— 这一项等于没写，
-        # 拐角处照样 1.2 m/s 冲过去。降到 2.5 后 κ=2.85 的弯限到 1.03 m/s。
-        # 实测总时间几乎不变（拐角弧长占比极小），但拐角是真降速了。
         self.lat_acc_max = 7.0          # 允许的最大横向加速度 [m/s²]
-        # 弯道速度下限：0.8 → 1.0 → 1.2，最小视野 1.41 → 1.76 → 2.11 m。
+        # 弯道速度下限。视野 = v·dt·N，压低它会缩短前视距离。
         self.speed_min = 1.20         # 再慢也不低于这个
 
         # 路径上每点的限速（set_goal 时算）
         self._path_s: np.ndarray | None = None
         self._path_vmax: np.ndarray | None = None
 
-        # ---- 动态障碍（雷达）----
-        # 动态避障总开关。默认关闭 —— 底盘还没接雷达时不会有任何数据，
-        # 保持关闭也能避免"订阅了不存在的话题"这类困惑。
-        # 接上 MS200 之后设 True（或者直接调 set_scan，会自动打开）。
-        # 动态避障总开关。打开后 set_scan / set_obstacle_points 才会存点，
-        # update() 里才会做「障碍挡路 → 重规划」。
-        # 本库只认「世界坐标点云」这一种输入（见 set_scan / set_obstacle_points），
-        # 不关心它来自激光雷达、视觉、还是别的系统的真值 —— 那是调用方的事。
-        # 关着时上述两个 setter 和 add_manual_obstacle 全部直接 return。
+        # ---- 动态障碍 ----
+        # 总开关。关着时 set_scan / set_obstacle_points / add_manual_obstacle
+        # 全部直接 return，update() 也不做「障碍挡路 → 重规划」。
+        # 本库只认「世界坐标点云」这一种输入，不关心它来自激光雷达、
+        # 视觉还是仿真真值 —— 那是调用方的事。
         self.enable_dynamic_obstacles = True
         self._dynamic_points: np.ndarray | None = None   # (N, 2) 世界坐标
         # 调试层：手动加的障碍（Foxglove 点选）。和 _dynamic_points 分开存，
@@ -201,10 +179,8 @@ class Navigation:
         self._manual_centers: list[tuple[float, float, float]] = []
         self._scan_dirty = False
         self._last_replan = 0.0
-        # 最快重规划间隔：0.4 → 0.25 s，让车对逼近的障碍反应更及时。
-        # 代价：一次重规划 A* 50~70 ms + smooth 10~20 ms ≈ 70~100 ms，
-        #      所以相邻两次之间至少留 2~3 倍余量，0.25 s 是下限附近。
-        #      再小（<0.2）会让 /cmd_vel 明显掉频。
+        # 最快重规划间隔。一次重规划 A* 50~70 ms + smooth 10~20 ms ≈ 70~100 ms，
+        # 相邻两次之间要留 2~3 倍余量；再小会让 /cmd_vel 明显掉频。
         self.replan_interval = 0.25       # 最快重规划间隔 [s]
         self.blocked_retry_interval = 0.6 # 被堵死时多久重试一次 [s]
         # 动态障碍的膨胀半径（A* 会绕开这么远）。
@@ -219,9 +195,8 @@ class Navigation:
         # 触发重规划的距离（**从障碍表面算**，即到 _dynamic_points 的最近距离）。
         # 换成从障碍几何中心算 = 它 + 障碍外接圆半径（仿真方块 0.46 m）。
         #     0.30 + 0.46 = 0.76 m   ← 从中心算 0.76 m 内有障碍就重规划
-        # **必须保持 < dynamic_inflate_radius(0.40)**，
-        # 否则 A* 绕完立刻又判挡路 → 每 0.25 s 重规划一次 → 路径乱变。
-        # （膨胀半径从 1.40 一路降到 0.40，这个值跟着 1.10 → 0.60 → 0.30。）
+        # 必须保持 < dynamic_inflate_radius，否则 A* 刚绕开又判挡路，
+        # 会变成每 replan_interval 重规划一次、路径乱变。
         # 它只影响「什么时候重新规划」，不影响 A* 给障碍留多宽。
         self.block_threshold = 0.30
         # ---- 动态障碍距离限速（离得越近越慢）----
@@ -229,16 +204,9 @@ class Navigation:
         # 速度按制动距离公式给出：  v = sqrt(2·a·(gap − stop_gap))
         #   gap <= stop_gap            → 0（刹停）
         #   gap >= full_gap            → 不限制（由限速剖面决定）
-        # 预警范围放大、停止距离缩小：
-        #     stop_gap 0.40 → 0.25   更贴近才刹停（A* 绕开后净间隙 >= 0.95，
-        #                            所以正常情况根本到不了 0.25）
-        #     full_gap 2.00 → 3.00   3 m 内都开始留意
-        #     brake_a  5.00 → 3.00   曲线更平缓，让减速**提前**发生
-        # 必须同时降 a：full_gap 只是截断点，真正的「从哪开始减」由 a 决定。
-        #   a=5.0 时 gap=1.85 就满速了，把 full_gap 提到 3.0 也毫无效果；
-        #   a=3.0 时 gap 要到 3.0 才满速，这才真的把预警范围拉开。
-        # 内圈（刹停）：0.25 → 0.15 → 0.10，越来越贴近才停。
-        #   净间隙 0.10 m ⇔ 车心到对方车心 0.10 + 0.884 = 0.98 m。
+        # full_gap 只是截断点，真正「从哪开始减速」由 a 决定：
+        # a 大则曲线陡、很快就满速，full_gap 提再大也不起作用。
+        # 车心到对方车心的距离 = gap + 0.884（两侧外接圆之和）。
         self.dyn_stop_gap = 0.10     # [m] 净间隙降到这个值 → 速度 0
         # 外圈（预警）范围：3.00 → 2.00，因为 dv_max=3.0 时从 4 m/s 刹停
         # 只需 4²/(2·3) = 2.67 m，2 m 的预警圈已经够用。
@@ -319,11 +287,9 @@ class Navigation:
             return False
 
         # 起点**强制**可通行：车就在这儿，不管图上怎么说都必须从这儿出发。
-        # 之前用 nearest_free 找 40 cm 内的空格，车停在围栏旁或被动态障碍
-        # 的膨胀覆盖时，找不到空格就直接规划失败 —— 表现为"发了目标车不动"。
-        # ★ 开洞半径要覆盖车体外接圆，不能只开 3x3（15 cm）。
-        #   动态障碍的膨胀半径是 0.50 m：车一旦冲进去，3x3 的洞外面全是
-        #   LETHAL，A* 从起点就迈不出去 → 无解 → _blocked 永久卡死。
+        # 开洞半径要覆盖车体外接圆，不能只开 3×3 格：
+        # 车一旦落进动态障碍的膨胀区，洞外全是 LETHAL，
+        # A* 从起点就迈不出去 → 无解 → _blocked 永久卡死。
         r_open = max(1, int(math.ceil(self.car_sweep_radius / spec.resolution)))
         plan_cost[max(0, sj - r_open):min(height, sj + r_open + 1),
                   max(0, si - r_open):min(width, si + r_open + 1)] = 0
@@ -586,10 +552,8 @@ class Navigation:
         # 曲率（曲率限速、折返判定都要用）
         kappa = self._curvature(points)
 
-        # ★ 已移除"窄路限速"（横向余量 → 速度的映射）和它的直道豁免。
-        #   原来窄处降到 speed_floor、宽处跑满，是"离墙多近"在限制速度。
-        #   现在速度只由路径的**拐弯**决定：直道一律 speed_wide，弯道按
-        #   曲率/转向速率压，掉头按制动距离压。
+        # 速度只由路径的**拐弯**决定：直道一律 speed_wide，
+        # 弯道按曲率/转向速率压，掉头按制动距离压。
         vmax = np.full(len(points), self.speed_wide, dtype=np.float64)
 
 
@@ -597,11 +561,8 @@ class Navigation:
         #   ① 横向加速度   v <= sqrt(a_lat · R)
         #   ② 转向速率     v <= dα · R
         #
-        # ★ ② 才是本项目的瓶颈：车头锁死（ω=0），拐弯只能靠 α，
-        #   而 α 的变化率受 dα ≤ 2 rad/s 限制。半径 0.35 m 的弯：
-        #       ① 给 0.94 m/s，② 只给 0.70 m/s
-        #   原来只按 ① 算（而且 a_lat 还写到 100，完全失效），
-        #   车以 1.0+ m/s 进弯，α 转不过来 → 冲出弯道 → 就是"过直角墙撞墙"。
+        # ② 是瓶颈：车头锁死（ω≡0），拐弯只能靠 α，而 α 的变化率受
+        # dalpha_max 限制。半径越小，转向速率约束越紧，通常比 ① 更严。
         radius = 1.0 / np.maximum(kappa, 1e-3)
         v_lat = np.sqrt(self.lat_acc_max * radius)      # 横向加速度
         v_steer = self.k_steer_limit * radius           # 转向速率（留余量）
@@ -628,9 +589,8 @@ class Navigation:
         #   单点转角接近 180°，车靠 v 变号（α 不用变、车头不转）。
         #   这种地方不存在转弯半径，曲率算出来是采样假象（R≈5 cm）。
         #
-        #   而"圆弧转过 90°"是**真正的弯道**，有明确的半径，必须走曲率限速。
-        #   原来阈值取 30°，结果：只要 margin 够大，v_brake = sqrt(2·dv·margin)
-        #   就给到 2.4~5.2，把曲率限速的 0.45~1.0 彻底覆盖 → 弯道不掉速 → 冲出去。
+        #   而「圆弧转过 90°」是真正的弯道，有明确半径，必须走曲率限速。
+        #   阈值取小了会把弯道误判成折返，v_brake 把曲率限速整个覆盖掉。
         sharp = turn > np.radians(150.0)
         if sharp.any():
             v_brake = np.sqrt(2.0 * self.dv_max * np.maximum(margin, 1e-3))
@@ -653,10 +613,9 @@ class Navigation:
         #     v(s)² <= v(s')² + 2·a·(s' − s)   对任意 s' >= s
         # 从终点往起点扫一遍就等价于取所有 s' 的 min，O(N)。
         v_raw = vmax.copy()
-        # ★ 终点必须停车，这是包络的边界条件。
-        #   不设的话：终点 vmax 保持 speed_wide（实测 3.75），后向扫描从
-        #   它出发往前推，结果整条路径末段速度是**往上爬**的（3.40→3.75），
-        #   车到终点不但不减速，还在加速 → 冲过头。
+        # 终点必须停车，这是包络的边界条件。
+        # 不设的话后向扫描从满速出发往前推，末段速度会一路往上爬，
+        # 车到终点不但不减速还在加速。
         vmax[-1] = self.speed_min
 
         # 后向：刹车够不够（往终点方向扫）
@@ -673,8 +632,8 @@ class Navigation:
                                           * max(float(s[1] - s[0]), 1e-6)))
 
         # 前向：加速够不够（往起点方向扫）
-        # 少了这一步，弯道出口会从 1.02 直接跳到 4.00（实测梯度 31.5 m/s²，
-        # 远超物理能力），阶梯照样存在，只是换了个方向。
+        # 少了这一步，弯道出口的速度会直接跳回满速，
+        # 阶跃超过加速度物理能力，阶梯只是换了个方向。
         for i in range(1, len(vmax)):
             ds = float(s[i] - s[i - 1])
             ceiling = math.sqrt(vmax[i - 1] ** 2 + 2.0 * self.accel_plan * ds)

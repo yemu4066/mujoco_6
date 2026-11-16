@@ -58,9 +58,8 @@ def _read_pgm(path: pathlib.Path) -> np.ndarray:
             idx += 1
         tokens.append(data[start:idx])
     idx += 1
-    # PGM(P5) 头部是 "P5 <width> <height> <maxval>"，注意**宽在前**。
-    # 原来写成 (tokens[1], tokens[2]) = (height, width)，宽高对调了。
-    # 正方形地图（如 rc2027.pgm 224×224）看不出来，非正方形就整张错位。
+    # PGM(P5) 头部是 "P5 <width> <height> <maxval>"，宽在前。
+    # 弄反了正方形地图看不出来，非正方形会整张错位。
     width, height = int(tokens[1]), int(tokens[2])
     return np.frombuffer(data[idx:], dtype=np.uint8).reshape(height, width)
 
@@ -120,9 +119,8 @@ def inflate(occupied: np.ndarray, resolution: float, inscribed_radius: float,
 
     cost[dist >= float(inflation_radius)] = 0.0
     # dist < inscribed_radius 必须是**真正的**不可通行。
-    # 之前只给到 LETHAL-1（253），而判可通行的阈值就是 <254，
-    # 于是这条"硬约束"实际上没生效 —— inscribed_radius 形同虚设，
-    # A* 会贴着墙走，过 0.9 m 宽的窄门时车角就刮上了。
+    # 判可通行用的是 < LETHAL，所以这里必须正好给 LETHAL，
+    # 给 LETHAL-1 等于这条硬约束没生效，A* 会贴着墙走。
     cost[dist < float(inscribed_radius)] = LETHAL
     cost[occupied] = LETHAL
     return np.clip(cost, 0, LETHAL).astype(np.uint8)

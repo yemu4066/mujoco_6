@@ -137,11 +137,10 @@ class AcadosMPCBase(ABC):
         #   这里把 vmax 的坐标统一摊到 [0, s_max]。
         v_coord = np.linspace(0.0, s_max, len(vmax)) if s_max > 0 else np.zeros(len(vmax))
 
-        # ★ 起步对齐期：新目标下发后的前 hold_time 内，参考点只以 0.10 m/s
-        #   推进。MPC 追这个慢速参考点 → 输出 v≈0.10，车只走 3 cm，
-        #   物理舵轮有足够时间从 alpha_old 转到 alpha0。
-        #   不动 ref_speed、不碰 acados 的 ubx —— 避免上次那种
-        #   「stage 175 越界把 0.15 m/s 永久锁死」的坑。
+        # 起步对齐期：新目标下发后的前 hold_time 内，参考点只以 0.10 m/s
+        # 推进。MPC 追这个慢速参考点 → 输出 v≈0.10，车只走 3 cm，
+        # 物理舵轮有足够时间从 alpha_old 转到 alpha0。
+        # 不动 ref_speed、也不动 acados 的 ubx —— 逐 stage 改界会越界。
         hold = getattr(self, 'startup_hold', None)
         in_hold = False
         if hold is not None:
@@ -220,10 +219,8 @@ class AcadosMPCBase(ABC):
 
         # 4. 获取结果并转化
         # 取一条预测轨迹给 foxglove 画。
-        # ★ 这里每帧只更新一次计数器，真正取数每 10 帧才做一次 ——
-        #   solver.get 是 C 调用，原来每帧 45 次（4500 次/秒）会明显
-        #   推迟指令下发，把 100 Hz 的控制循环拖慢，实测会让控制变差。
-        #   现在 10 Hz × 23 点 = 230 次/秒，开销降到 1/20。
+        # 每帧只更新计数器，真正取数每 10 帧做一次。
+        # solver.get 是 C 调用，每帧几十次会推迟指令下发、拖慢控制循环。
         if self.following:
             self._viz_tick = getattr(self, '_viz_tick', 0) + 1
             if self._viz_tick % 10 == 0:
@@ -235,76 +232,6 @@ class AcadosMPCBase(ABC):
                     self.last_pred_traj = None
 
         return self._process_output(self.solver.get(0, "u"), self.solver.get(1, "x"))
-class OmniMPC(AcadosMPCBase):
-    def __init__(self, dt=0.05, n_horizon=20):
-        super().__init__(dt, n_horizon, nx=3, nu=3, np_p=3)
-    def _define_model(self):
-        model = AcadosModel()
-        model.name = "omni_model"
-        x, u, p = SX.sym('x', 3), SX.sym('u', 3), SX.sym('p', 3) #type: ignore
-        theta = x[2]
-        vx, vy, vw = u[0], u[1], u[2]
-        # 全向车动力学
-        f_expl = vertcat(vx * cos(theta) - vy * sin(theta), vx * sin(theta) + vy * cos(theta), vw)
-        model.x, model.u, model.p = x, u, p
-        model.f_expl_expr = f_expl
-        model.f_impl_expr = SX.sym('x_dot', 3) - f_expl #type: ignore
-        return model
-    def _setup_cost_and_constraints(self, ocp):
-        # 约束
-        ocp.constraints.idxbu = np.arange(3)
-        ocp.constraints.lbu = np.array([-3.0, -3.0, -2.0])
-        ocp.constraints.ubu = np.array([3.0, 3.0, 2.0])
-        ocp.constraints.x0 = np.zeros(3)
-        # 代价函数表达式
-        pos_err = ocp.model.x[0:2] - ocp.model.p[0:2] #type: ignore
-        angle_diff = ocp.model.x[2] - ocp.model.p[2]
-        wrapped_angle_diff = atan2(sin(angle_diff), cos(angle_diff))
-        ocp.model.cost_y_expr = vertcat(pos_err, wrapped_angle_diff, ocp.model.u)
-        ocp.model.cost_y_expr_e = vertcat(pos_err, wrapped_angle_diff)
-        # 权重
-        ocp.cost.W = np.diag([20.0, 20.0, 10.0, 0.5, 0.5, 0.5])
-        ocp.cost.W_e = np.diag([10.0, 10.0, 20.0])
-
-    def _process_output(self, u_0, x_1):
-        return u_0 # 直接返回 [vx, vy, vw]
-
-class SwerveMPC(AcadosMPCBase):
-    def __init__(self, dt=0.05, n_horizon=20):
-        super().__init__(dt, n_horizon, nx=3, nu=3, np_p=3)
-
-    def _define_model(self):
-        model = AcadosModel()
-        model.name = "swerve_simple_model"
-        x, u, p = SX.sym('x', 3), SX.sym('u', 3), SX.sym('p', 3) #type: ignore
-        theta = x[2]
-        v, alpha, vw = u[0], u[1], u[2]
-        # 舵轮动力学
-        f_expl = vertcat(v * cos(theta + alpha), v * sin(theta + alpha), vw)
-        model.x, model.u, model.p = x, u, p
-        model.f_expl_expr = f_expl
-        model.f_impl_expr = SX.sym('x_dot', 3) - f_expl #type: ignore
-        return model
-
-    def _setup_cost_and_constraints(self, ocp):
-        ocp.constraints.idxbu = np.arange(3)
-        ocp.constraints.lbu = np.array([-4.0, -np.pi, -2.0])
-        ocp.constraints.ubu = np.array([4.0, np.pi, 2.0])
-        ocp.constraints.x0 = np.zeros(3)
-        assert isinstance(ocp.model.x,SX)
-        pos_err = ocp.model.x[0:2] - ocp.model.p[0:2]
-        wrapped_angle_diff = atan2(sin(ocp.model.x[2] - ocp.model.p[2]), cos(ocp.model.x[2] - ocp.model.p[2]))
-        
-        ocp.model.cost_y_expr = vertcat(pos_err, wrapped_angle_diff, ocp.model.u)
-        ocp.model.cost_y_expr_e = vertcat(pos_err, wrapped_angle_diff)
-        
-        ocp.cost.cost_type = ocp.cost.cost_type_e = 'NONLINEAR_LS'
-        ocp.cost.W = np.diag([20.0, 20.0, 12.0, 0.35, 12.0, 12.0])
-        ocp.cost.W_e = np.diag([12.0, 12.0, 24.0])
-
-    def _process_output(self, u_0, x_1):
-        # 将 [v, alpha, vw] 转为 [vx, vy, vw] 适配底盘
-        return np.array([u_0[0]*cos(u_0[1]), u_0[0]*sin(u_0[1]), u_0[2]])
 class AugmentedSwerveMPC(AcadosMPCBase):
     def __init__(self, dt=0.05, n_horizon=20):
         self.last_aug_state = np.zeros(3) # [v, alpha, vw]
@@ -336,23 +263,20 @@ class AugmentedSwerveMPC(AcadosMPCBase):
         # vw 上下界均为 0：平移阶段完全锁死自转，靠 alpha 平移
         # v 允许为负：车头锁死后，反向移动靠倒车实现，
         # 否则要求 alpha≈±π，正好卡在约束边界，求解器会退回零解。
-        # （试过把 alpha 收到 ±π/2 来消掉 (v,α)/(-v,α+π) 的冗余解，效果不好，已回退）
-        # ★ alpha 的界放宽到 ±20π（≈±3600°），只作数值防爆，不再当物理约束。
-        #   卡在 ±π 时，alpha 走到 +π 附近（车头朝上、向下运动就是这个状态）
-        #   就只有一个方向能走，另一侧撞 ubx 墙 —— 这个「临界点」正是
-        #   「向下运动左转冲直线」的来源。放开后 alpha 连续累积，临界消失。
-        #   前提：_process_output 存的 last_aug_state[1] 必须**不归一化**，
-        #   否则每帧把 alpha 瞬移回 [−π,π]，反而制造跳变。
+        # alpha 的界放宽到 ±20π，只作数值防爆，不再当物理约束。
+        # 卡在 ±π 时 alpha 走到边界附近就只剩一个方向能走，另一侧撞 ubx，
+        # 这个临界点会让转角行为突变。放开后 alpha 连续累积，临界消失。
+        # 前提：_process_output 存的 last_aug_state[1] 必须**不归一化**，
+        # 否则每帧把 alpha 瞬移回 [−π, π]，反而制造跳变。
         A_LIM = 20.0 * math.pi
         ocp.constraints.lbx = np.array([-5.0, -A_LIM, 0.0])
         ocp.constraints.ubx = np.array([5.0, A_LIM, 0.0])
         # 控制约束 [dv, dalpha, dw]
         ocp.constraints.idxbu = np.arange(3)
         # dw 同样锁 0：控制量也不产生角速度变化
-        # dα 上限 4.0 → 6.0：与 MuJoCo 底盘的 steer_rate_limit=8.0 对齐。
-        # 原来 4.0 时 4 m/s 下 R_min = v/dα = 1.00 m，过不了 0.3~0.5 m 的急弯；
-        # 30° 转舵滞后 0.131 s，远大于回线时间常数 τ=0.046 s → 正弦画龙。
-        # 提到 6.0 后 R_min = 0.67 m、t_lag(30°) = 0.087 s。
+        # dα 上限与 MuJoCo 底盘的 steer_rate_limit 对齐。
+        # R_min = v/dα：dα 越小急弯越难过；同时 t_lag(30°) = Δα/dα 越大，
+        # 越容易超过回线时间常数 τ 而出现画龙。
         ocp.constraints.lbu = np.array([-3.0, -6.0, 0.0])
         ocp.constraints.ubu = np.array([3.0, 6.0, 0.0])
         ocp.constraints.x0 = np.zeros(6)
@@ -361,10 +285,9 @@ class AugmentedSwerveMPC(AcadosMPCBase):
         wrapped_angle_diff = atan2(sin(ocp.model.x[2] - ocp.model.p[2]), cos(ocp.model.x[2] - ocp.model.p[2]))
 
         # 横向偏差 = (车 - 参考点) 在**路径法向**上的投影。
-        # 为什么需要它：只惩罚 pos_err 时，拐角处"切内角"能让后续参考点的误差
-        # 全部变小，所以数学上切角是最优解。实测最大横向偏移 15 cm，而 1 m
-        # 通道单边余量只有 17.5 cm，几乎没有容错空间。
-        # 单独惩罚法向分量后，切角不再"免费"。
+        # 为什么需要它：只惩罚 pos_err 时，拐角处「切内角」能让后续参考点的
+        # 误差全部变小，所以数学上切角就是最优解。单独惩罚法向分量后，
+        # 切角不再「免费」。
         dx = ocp.model.x[0] - ocp.model.p[0]
         dy = ocp.model.x[1] - ocp.model.p[1]
         lateral_err = dx * ocp.model.p[3] + dy * ocp.model.p[4]
@@ -385,103 +308,21 @@ class AugmentedSwerveMPC(AcadosMPCBase):
                                           ocp.model.x[3:6])
         
         ocp.cost.cost_type = ocp.cost.cost_type_e = 'NONLINEAR_LS'
-        # 位置权重下调到 0.5：反正有横向项管住"别偏"，不再需要靠位置项硬拉。
-        # 横向权重 2.0：这是抑制切角的主力。
-        # 位置 2.0/2.0，横向 4.0 不变。
-        # 方向项 0.2 → 4.0：α 是唯一的转弯手段（ω≡0，车头锁死），
-        #   原来方向项只占 2.3%，MPC 几乎没有动力去用满 dα ≤ 4.0。
-        # dα 惩罚 0.2 → 0.05：
-        #   打满舵一步的代价 = 0.2×4² = 3.20，而方向歪 90° 才 0.49，
-        #   优化器宁可歪 90° 也不打舵 —— 这就是过冲的直接来源。
-        #   降到 0.05 后打满舵 = 0.80；配合方向项 4.0，
-        #   "歪 30°" = 4.0×0.52² = 1.08 > 0.80，转舵才开始划算。
-        # 方向项 0.2 / dα 惩罚 0.2 —— 回到 fb29347 的原版。
-        # 曾经把它改成 W[2]=4.0 / W[8]=0.05（想让 α 更积极），
-        # 但 W[2] 本质是横向回线的「阻尼」：e_lat_dot ≈ v·e_ψ，
-        # 惩罚 e_ψ 就是惩罚回线速度。实测切入角从 31.4° 掉到 7.0°，
-        # 收敛距离从 0.55 m 涨到 2.45 m —— 车平行于路径平移，窄道撞墙。
-        # W[8] (dα) 0.2 → 0.05：原来打满舵一步代价 0.2×6²=7.2，
-        # 而方向歪 90° 才 0.2×1.57²=0.49 —— 优化器宁可歪 90° 也不打舵。
-        # 其余权重保持 fb29347 原版：位置 2.0 / 横向 4.0 / 方向 0.2。
-        # 横纵权重比 1.0 : 9.0（原 3:1），让 MPC 在弯道更愿意「降速换贴线」，
-        # 而不是「高速外抛、出弯猛打方向拉回来」（就是看到的折返纠偏）。
-        # 纵向权重降到 1.0 不会导致直道掉速：参考点仍以 4.0 前进，1.0 足以
-        # 产生牵引，真正的加速瓶颈是 dv<=3.0。
-        # W[2] 0.2 → 1.2：τ = 1/(v·sqrt(q_lat/W[2]))，q_lat=9.0、v=4.0
-        #   → τ = 1/(4·sqrt(9/1.2)) = 0.091 s，刚大于 30° 转舵滞后
-        #   0.087 s（dα=6.0 时）。0.8 只有 0.075 s 仍欠阻尼。
-        # 横向 8.0 → 12.0（横纵比 13:1），让车更贴曲线；
-        # 加速度代价 dv 0.05 → 0.02，让加减速更果断。
+        # ---- 权重 ----
         # 索引：0/1 位置、2 方向、3 横向、4/5/6 v/α/ω、7 dv、8 dα、9 dω
-        # 横向 12.0 → 6.0（横纵比 7:1）：太贵会让车为躲横向误差频繁大角度
-        # 打舵、出弯来回摆；6.0 时 τ = 1/(4·sqrt(7/1.2)) = 0.103 s，
-        # 明显大于 30° 转舵滞后 0.087 s，回线更平稳。加速度代价保持 0.02。
-        # 索引：0/1 位置、2 方向、3 横向、4/5/6 v/α/ω、7 dv、8 dα、9 dω
-        # 横向 6.0 → 4.0（横纵比 5:1）。tau = 1/(4·sqrt(5/1.2)) = 0.123 s，
-        # 是 30° 转舵滞后(0.087 s)的 1.4 倍，回线更平顺、更不容易摆。
-        # 加速度代价保持 0.02。
-        # 索引：0/1 位置、2 方向、3 横向、4/5/6 v/α/ω、7 dv、8 dα、9 dω
-        # 位置权重恢复 2.0（fb29347 原值）。之前被我在 45cc949 里改成 1.0，
-        # 那是我照搬别人建议、擅自改的，没有实测依据，而且削弱了纵向追赶
-        # 能力（弯道更容易落后）。这里恢复。
-        # 索引：0/1 位置、2 方向、3 横向、4/5/6 v/α/ω、7 dv、8 dα、9 dω
-        # 横向 4.0 → 8.0（横纵比 5:1），对照最早那版做 A/B 比较。
-        # 位置 2.0 / 方向 1.2 / dv 0.02 / dα 0.05 保持当前值。
-        # 索引：0/1 位置、2 方向、3 横向、4/5/6 v/α/ω、7 dv、8 dα、9 dω
-        # ★ 位置/横向等比缩小一半，比例（2:8 → 1:4，横纵比仍 5:1）不变。
-        #   目的：降低「位置误差」的绝对代价，让 MPC 更愿意接受「弯道降速
-        #   导致的位置落后」。原来位置 2.0 时，降速会让位置误差迅速变大、
-        #   代价太高，MPC 宁可高速冲过去也不肯减速。
-        #   缩一半后：位置 1.0 / 横向 4.0，比例不变，绝对值便宜一半。
-        #   tau = 1/(4·sqrt(5/1.2)) = 0.122 s，仍大于 30° 滞后 0.087 s。
-        # 索引：0/1 位置、2 方向、3 横向、4/5/6 v/α/ω、7 dv、8 dα、9 dω
-        # ★ 等比放大到 2.5 / 10（比例仍是 1:4，横纵比 5:1）。
-        #   上一步缩到 1.0/4.0 是往「更愿意降速」方向试；这一步反向验证
-        #   「位置偏差更贵会不会更贴线 / 更不肯降速」。
-        #   注意：tau = 1/(4·sqrt(12.5/1.2)) = 0.0775 s，已小于
-        #   30° 转舵滞后 0.087 s，属轻微欠阻尼，出弯可能有点过冲。
-        # 索引：0/1 位置、2 方向、3 横向、4/5/6 v/α/ω、7 dv、8 dα、9 dω
-        # ★ 方向权重 1.2 → 1.8，消除出弯震荡。位置/横向保持 2.5/10（贴线要保住）。
-        #   tau = 1/(v·sqrt(q_lat/W[2]))，q_lat = 2.5+10 = 12.5：
-        #       W[2]=1.2 -> tau = 0.077 s，tau/滞后 = 0.89  ❌ 欠阻尼（震荡）
-        #       W[2]=1.8 -> tau = 0.095 s，tau/滞后 = 1.09  ✅ 有余量（采用）
-        #   滞后 t_lag = 30°转舵 / dα_max = 0.524/6.0 = 0.087 s。
-        # 索引：0/1 位置、2 方向、3 横向、4/5/6 v/α/ω、7 dv、8 dα、9 dω
-        # ★ 位置/横向 2.5/10 → 3/12（比例仍 1:4，横纵比 5:1）。
-        #   W[2] 同步 1.8 → 2.2，保持和上一版相同的阻尼余量：
-        #       q_lat = 3+12 = 15
-        #       W[2]=1.8 -> tau = 0.0866 s，tau/滞后 = 1.00  ❌ 回到临界（会震荡）
-        #       W[2]=2.2 -> tau = 0.0957 s，tau/滞后 = 1.10  ✅ 与上一版同余量（采用）
-        #   滞后 t_lag = 30°转舵 / dα_max = 0.524/6.0 = 0.087 s。
-        # 索引：0/1 位置、2 方向、3 横向、4/5/6 v/α/ω、7 dv、8 dα、9 dω
-        # ★ 位置/横向回到 2/2/8（比例仍 1:4，横纵比 5:1），
-        #   并把 W[2] 反解到 1.47，让阻尼和上一版完全一致：
-        #       q_lat = 2+8 = 10
-        #       目标 tau = 1.10 × 滞后(0.087) = 0.0957 s
-        #       W[2] = q_lat·(4·tau)² = 10×(0.383)² = 1.47
-        #       实际 tau = 1/(4·sqrt(10/1.47)) = 0.0959 s，tau/滞后 = 1.10 ✅
-        #   这样「位置/横向的绝对值」和「回线阻尼」被解耦成两个独立变量，
-        #   不会像上一步那样改一档就顺带把阻尼也改了。
-        # 索引：0/1 位置、2 方向、3 横向、4/5/6 v/α/ω、7 dv、8 dα、9 dω
-        # ★ 横向单独调大 8.0 → 12.0（位置保持 2.0），横纵比 5:1 → 7:1。
-        #   注意：这是**真正改变比例**，不是等比例缩放 —— 所以应该能看到
-        #   和之前调位置/横向不同的效果。
-        #   副作用：q_lat 从 10 涨到 14，tau 从 0.096 掉到 0.081 s，
-        #   tau/滞后 = 0.93，掉进欠阻尼区，可能会震荡。
-        #   如果确实震荡，把 W[2] 从 1.47 提到 2.05（反解：保持 tau/滞后=1.10），
-        #   那样只增加阻尼、不改横纵比。
-        # 索引：0/1 位置、2 方向、3 横向、4/5/6 v/α/ω、7 dv、8 dα、9 dω
-        # ★ 线加速度代价 dv 0.02 → 0.01（降一半），让加减速更果断。
-        #   索引 7 = dv（纵向加速度），硬约束 ±3.0。
-        #   满加速一步代价：0.02×9 = 0.18 → 0.01×9 = 0.09。
-        #   横向保持 12.0（横纵比 7:1），方向 1.47（阻尼、tau 都不变）。
-        # 索引：0/1 位置、2 方向、3 横向、4/5/6 v/α/ω、7 dv、8 dα、9 dω
-        # 加速度代价 dv = 0.01。
-        #   · 0.02 时刹车"太贵"，MPC 宁可高速冲弯也不肯大幅减速；
-        #   · 0.01 是实测的甜点，既敢踩刹车又不至于 bang-bang；
-        #   · 0.0  试过，效果更差（dv 完全无软代价，只剩硬约束 ±3.0，
-        #          优化器在多个等价解间乱跳，车一顿一顿）。
-        # 索引：0/1 位置、2 方向、3 横向、4/5/6 v/α/ω、7 dv、8 dα、9 dω
+        #
+        # 横向项（W[3]）是抑制「切内角」的主力：只惩罚位置误差时，拐角处
+        # 切内角能让后续参考点误差全部变小，数学上切角就是最优解。
+        # 单独惩罚法向分量后，切角不再「免费」。
+        #
+        # 方向项（W[2]）本质是横向回线的阻尼：e_lat_dot ≈ v·e_ψ，
+        # 惩罚 e_ψ 就是惩罚回线速度。tau = 1/(v·sqrt(q_lat/W[2]))，
+        # q_lat = W[0]+W[3]。tau 必须大于转舵滞后 t_lag = Δα/dα_max
+        # （30° @ 6 rad/s → 0.087 s），否则回线欠阻尼、表现为来回摆。
+        #
+        # dα 惩罚（W[8]）要和方向项一起看：打满舵一步的代价
+        # = W[8]·dα²，方向歪 90° 的代价 = W[2]·(pi/2)²。
+        # 前者大于后者时，优化器宁可歪着也不打舵。
         ocp.cost.W = np.diag([2.0, 2.0, 1.47, 12.0, 0, 0, 0, 0.01, 0.05, 0.2])
         ocp.cost.W_e = np.diag([4.0, 4.0, 0.2, 4.0, 0.2, 0.2, 0.2])
 
@@ -494,13 +335,12 @@ class AugmentedSwerveMPC(AcadosMPCBase):
     def _process_output(self, u_0, x_1):
         # 提取预测的下一步状态作为当前的底盘指令
         v_next, alpha_next, vw_next = x_1[3:6]
-        # ★ 这里**绝对不要**对 alpha_next 做 atan2/归一化。
-        #   归一化会把 alpha 每帧瞬移回 [−π, π]，等于人为制造 ±π 跳变，
-        #   MPC 认为 alpha 突变（违反 dα 约束），轨迹直接乱掉 ——
-        #   这正是上一版「放宽界后 U 型弯全撞墙」的真正原因。
-        #   保持 alpha 连续累积，临界状态才会消失。
-        #   （发给底盘时在下面的 a_out 里仍会用 atan2 归一到 [−π, π]，
-        #     那是输出，不影响内部状态。）
+        # 这里**绝对不要**对 alpha_next 做 atan2/归一化。
+        # 归一化会把 alpha 每帧瞬移回 [−π, π]，等于人为制造 ±π 跳变，
+        # MPC 认为 alpha 突变（违反 dα 约束），轨迹直接乱掉。
+        # 保持 alpha 连续累积，临界状态才会消失。
+        # （发给底盘时在下面的 a_out 里仍会归一到 [−π, π]，那是输出，
+        #   不影响内部状态。）
         self.last_aug_state = np.array([v_next, alpha_next, vw_next])
 
         # ★ 规范化到 |alpha| <= 90°。
