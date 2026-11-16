@@ -1,18 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- rc2027 场地 —— 按 V3 规则（2026-11 新版开源场地）重建
+<!-- rc2027 场地 —— 按 V3 新版开源场地重建，但**保持旧版的朝向**（东西分半）
 
-  与旧版 scene_nav_v1_old.xml 的差异（新版把场地整体转了 90°）：
-    · 中央隔板沿 x 轴（y=0），把地面分成南北两半（旧版是东西，沿 y 轴）
-    · 过渡带在南北两侧 y∈[3,4] 和 [-4,-3]（旧版在东西 x∈[±3,±4]）
-    · 每条过渡带：西侧 4 级台阶（每级 150 mm 高、1 m 深），
-      东侧 9.68° 坡道（沿 x 长 3.5 m、宽 1 m、升 0.597 m）
-    · L1 北/南围栏在 x∈[-1.8,-0.8] 留 1 m 宽的台阶口
-    · 五色石基座在 (4.15, 0)（旧版在 (0, 4.25)）
-    · L2 四周只有 4 mm 的视觉边界线，不是物理墙
+  朝向说明：新版 SDF 的坐标里场地是「南北分半」（中央隔板沿 x 轴）。但导航栈、
+  地图、obstacle_motion 的巡逻轨迹都是按旧版「东西分半」来的。这里把新版的
+  几何绕 z 轴转 90°（即交换 x/y）还原成旧朝向 —— 除了 L2 和写法差异，两份
+  地图在功能上应该是一样的。
+
+  转完之后（与旧版 scene_nav_v1_old.xml 一致）：
+    · 中央隔板沿 **y 轴**（x=0），地面分**东西**两半
+    · 过渡带在**东西**两侧 x∈[3,4] / [-4,-3]，y∈[-2.7,2.7]
+    · 每条过渡带：**南侧 4 级台阶**（每级 150 mm 高、1 m 深），
+      **北侧 9.68° 坡道**（沿 y 长 3.5 m、宽 1 m、升 0.597 m）
+    · L1 东西围栏在 y∈[-1.8,-0.8] 留 1 m 宽的台阶口
+    · 五色石基座在 (0, 4.15)
+    · L2 四周只有 4 mm 视觉边界线，不是物理墙
     · 中央基座 Ø270 × 高 800，坐在 L2 顶面
 
-  几何全部用 primitive（box/cylinder），只有坡道用 meshes/ramp.obj ——
-  新版开源 SDF 本来就是这么做的，比旧版几十个 mesh 轻得多、好维护。
+  坡道用**倾斜的 box**而不是 mesh —— 和旧版的做法一致（旧版
+  col_band_*_ramp 就是 quat 倾斜的 box）。box 的碰撞稳定、参数直观，
+  不会受 mesh 质心自动居中（autolimits）的影响。
+
+  几何全部是 primitive，没有 mesh，加载快、无外部依赖。
 
   保留了本项目自己的：主分支舵轮底盘 chassis（起点在东南角地面），
   以及 obstacle_l1 / obstacle_l2 两个 mocap 移动对手（动态避障测试用）。
@@ -25,7 +33,6 @@
   <option timestep="0.001" gravity="0 0 -9.81" iterations="100" tolerance="1e-12" />
 
   <asset>
-    <mesh name="mesh_ramp" file="ramp.obj" />
   </asset>
 
   <worldbody>
@@ -43,14 +50,14 @@
     <geom name="地面区-蓝" type="box" size="5.5 2.75 0.005" pos="0 -2.75 0.005"
           rgba="0.67 0.82 0.90 1" contype="0" conaffinity="0" condim="3" friction="0.9 0.005 0.0001"/>
 
-    <!-- ===== 中央隔板：把地面分成南北两半（规则 V3）===== -->
-    <geom name="中央隔板_1" type="box" size="0.325 0.05 0.04" pos="-5.175 0 0.04"
+    <!-- ===== 中央隔板：沿 y 轴（x=0），把地面分成东西两半 ===== -->
+    <geom name="中央隔板_1" type="box" size="0.325 0.05 0.04" pos="0 -5.175 0.04"
           rgba="0.85 0.85 0.85 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
-    <geom name="中央隔板_2" type="box" size="1.8 0.0305 0.04" pos="-1.84 0.015 0.04"
+    <geom name="中央隔板_2" type="box" size="1.8 0.0305 0.04" pos="0.015 -1.84 0.04"
           rgba="0.85 0.85 0.85 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
-    <geom name="中央隔板_3" type="box" size="1.825 0.0405 0.04" pos="1.825 0.01 0.04"
+    <geom name="中央隔板_3" type="box" size="1.825 0.0405 0.04" pos="0.01 1.825 0.04"
           rgba="0.85 0.85 0.85 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
-    <geom name="中央隔板_4" type="box" size="0.45 0.025 0.04" pos="5.125 0.015 0.04"
+    <geom name="中央隔板_4" type="box" size="0.45 0.025 0.04" pos="0.015 5.125 0.04"
           rgba="0.85 0.85 0.85 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
 
     <!-- ===== 外围墙（内高 80 mm，厚 50 mm）===== -->
@@ -66,53 +73,57 @@
     <!-- ===== L1 台体 6×6，顶面 z=0.6 ===== -->
     <geom name="L1" type="box" size="3 3 0.3" pos="0 0 0.3"
           rgba="0.80 0.80 0.82 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
-    <geom name="L1隔板-左" type="box" size="0.925 0.025 0.025" pos="-1.3255 0 0.625"
+    <geom name="L1隔板-下" type="box" size="0.025 0.925 0.025" pos="0 -1.3255 0.625"
           rgba="0.85 0.85 0.85 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
-    <geom name="L1隔板-右" type="box" size="1.125 0.025 0.025" pos="1.125 0 0.625"
+    <geom name="L1隔板-上" type="box" size="0.025 1.125 0.025" pos="0 1.125 0.625"
           rgba="0.85 0.85 0.85 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
-    <geom name="L1围栏-西" type="box" size="0.025 3 0.025" pos="-3 0 0.625"
+    <geom name="L1围栏-北" type="box" size="3 0.025 0.025" pos="0 3 0.625"
           rgba="0.70 0.70 0.72 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
-    <geom name="L1围栏-东" type="box" size="0.025 3 0.025" pos="3 0 0.625"
+    <geom name="L1围栏-南" type="box" size="3 0.025 0.025" pos="0 -3 0.625"
           rgba="0.70 0.70 0.72 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
-    <geom name="L1围栏-北-东" type="box" size="1.9 0.025 0.025" pos="1.1 3 0.625"
+    <geom name="L1围栏-东-北" type="box" size="0.025 1.9 0.025" pos="3 1.1 0.625"
           rgba="0.70 0.70 0.72 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
-    <geom name="L1围栏-北-西" type="box" size="0.6 0.025 0.025" pos="-2.4 3 0.625"
+    <geom name="L1围栏-东-南" type="box" size="0.025 0.6 0.025" pos="3 -2.4 0.625"
           rgba="0.70 0.70 0.72 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
-    <geom name="L1围栏-南-东" type="box" size="1.9 0.025 0.025" pos="1.1 -3 0.625"
+    <geom name="L1围栏-西-北" type="box" size="0.025 1.9 0.025" pos="-3 1.1 0.625"
           rgba="0.70 0.70 0.72 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
-    <geom name="L1围栏-南-西" type="box" size="0.6 0.025 0.025" pos="-2.4 -3 0.625"
+    <geom name="L1围栏-西-南" type="box" size="0.025 0.6 0.025" pos="-3 -2.4 0.625"
           rgba="0.70 0.70 0.72 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
 
-    <!-- ===== 北过渡带 y∈[3,4]：西侧 4 级台阶 + 东侧 9.68° 坡道 ===== -->
-    <geom name="北台阶-2" type="box" size="0.95 0.5 0.075" pos="-1.75 3.5 0.075"
+    <!-- ===== 东过渡带 x∈[3,4]：南侧 4 级台阶 + 北侧 9.68° 坡道 ===== -->
+    <!-- 台阶：每级 150 mm 高、1 m 深(x)，从南往北升高，顶到 L1 的 z=0.6 -->
+    <geom name="东台阶-2" type="box" size="0.5 0.95 0.075" pos="3.5 -1.75 0.075"
           rgba="0.78 0.72 0.60 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
-    <geom name="北台阶-3" type="box" size="0.8 0.5 0.075" pos="-1.6 3.5 0.225"
+    <geom name="东台阶-3" type="box" size="0.5 0.8 0.075" pos="3.5 -1.6 0.225"
           rgba="0.78 0.72 0.60 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
-    <geom name="北台阶-4" type="box" size="0.65 0.5 0.075" pos="-1.45 3.5 0.375"
+    <geom name="东台阶-4" type="box" size="0.5 0.65 0.075" pos="3.5 -1.45 0.375"
           rgba="0.78 0.72 0.60 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
-    <geom name="北台阶-5" type="box" size="0.5 0.5 0.075" pos="-1.3 3.5 0.525"
+    <geom name="东台阶-5" type="box" size="0.5 0.5 0.075" pos="3.5 -1.3 0.525"
           rgba="0.78 0.72 0.60 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
-    <geom name="北坡道" type="mesh" mesh="mesh_ramp" pos="0 3 0"
+    <!-- 坡道：沿 y 长 3.5 m、宽(x) 1 m、升 0.597 m，倾角 9.68°，绕 x 轴倾斜 -->
+    <geom name="东坡道" type="box" size="0.5 1.75 0.025" pos="3.5 0.95 0.2739"
+          quat="0.996434 -0.084374 0 0"
           rgba="0.72 0.66 0.55 1" contype="1" conaffinity="1" condim="3"
           friction="0.9 0.005 0.0001"/>
 
-    <!-- ===== 南过渡带 y∈[-4,-3]（镜像）===== -->
-    <geom name="南台阶-2" type="box" size="0.95 0.5 0.075" pos="-1.75 -3.5 0.075"
+    <!-- ===== 西过渡带 x∈[-4,-3]（镜像）===== -->
+    <geom name="西台阶-2" type="box" size="0.5 0.95 0.075" pos="-3.5 -1.75 0.075"
           rgba="0.78 0.72 0.60 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
-    <geom name="南台阶-3" type="box" size="0.8 0.5 0.075" pos="-1.6 -3.5 0.225"
+    <geom name="西台阶-3" type="box" size="0.5 0.8 0.075" pos="-3.5 -1.6 0.225"
           rgba="0.78 0.72 0.60 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
-    <geom name="南台阶-4" type="box" size="0.65 0.5 0.075" pos="-1.45 -3.5 0.375"
+    <geom name="西台阶-4" type="box" size="0.5 0.65 0.075" pos="-3.5 -1.45 0.375"
           rgba="0.78 0.72 0.60 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
-    <geom name="南台阶-5" type="box" size="0.5 0.5 0.075" pos="-1.3 -3.5 0.525"
+    <geom name="西台阶-5" type="box" size="0.5 0.5 0.075" pos="-3.5 -1.3 0.525"
           rgba="0.78 0.72 0.60 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
-    <geom name="南坡道" type="mesh" mesh="mesh_ramp" pos="0 -4 0"
+    <geom name="西坡道" type="box" size="0.5 1.75 0.025" pos="-3.5 0.95 0.2739"
+          quat="0.996434 -0.084374 0 0"
           rgba="0.72 0.66 0.55 1" contype="1" conaffinity="1" condim="3"
           friction="0.9 0.005 0.0001"/>
 
     <!-- ===== L2 台体 3×3，顶面 z=0.9 ===== -->
     <geom name="L2" type="box" size="1.5 1.5 0.15" pos="0 0 0.75"
           rgba="0.86 0.86 0.88 1" contype="1" conaffinity="1" condim="3" friction="0.9 0.005 0.0001"/>
-    <!-- L2 四周边界线（原 SDF 只有 4 mm 厚，纯视觉，不挡车）-->
+    <!-- L2 四周边界线（纯视觉，不挡车）-->
     <geom name="L2界线-北" type="box" size="1.504 0.02 0.15" pos="0 1.502 0.75"
           rgba="0.35 0.35 0.38 1" contype="0" conaffinity="0" condim="3" friction="0.9 0.005 0.0001"/>
     <geom name="L2界线-南" type="box" size="1.504 0.02 0.15" pos="0 -1.502 0.75"
@@ -126,17 +137,17 @@
     <geom name="中央基座" type="cylinder" size="0.135 0.4" pos="0 0 1.3"
           rgba="0.75 0.70 0.20 1" contype="1" conaffinity="1" condim="3"
           friction="0.9 0.005 0.0001"/>
-    <geom name="五色石基座" type="cylinder" size="0.135 0.25" pos="4.15 0 0.25"
+    <geom name="五色石基座" type="cylinder" size="0.135 0.25" pos="0 4.15 0.25"
           rgba="0.75 0.70 0.20 1" contype="1" conaffinity="1" condim="3"
           friction="0.9 0.005 0.0001"/>
 
     <!-- ===== 两个 650×650 移动对手（mocap，视觉 + 真值发布，不参与物理碰撞）=====
          L1 在台面上 z=0.625+0.25=0.875；L2 在台面上 z=0.925+0.25=1.175 -->
-    <body name="obstacle_l1" mocap="true" pos="-2.2 -2.5 0.875">
+    <body name="obstacle_l1" mocap="true" pos="-2.5 -2.2 0.875">
       <geom name="obstacle_l1_geom" type="box" size="0.325 0.325 0.25"
             mass="5.0" rgba="1 0.55 0.10 0.85" contype="0" conaffinity="0" group="2" />
     </body>
-    <body name="obstacle_l2" mocap="true" pos="0.85 0 1.175">
+    <body name="obstacle_l2" mocap="true" pos="0 0.85 1.175">
       <geom name="obstacle_l2_geom" type="box" size="0.325 0.325 0.25"
             mass="5.0" rgba="1 0.20 0.60 0.85" contype="0" conaffinity="0" group="2" />
     </body>
@@ -147,9 +158,9 @@
         <geom name="chassis_visual_main" type="box" size="0.300 0.300 0.08" pos="0 0 -0.0" rgba="0.8 0.3 0.3 1" contype="0" conaffinity="0" mass="0"/>
         <!-- <geom name="chassis_visual_top" type="box" size="0.38 0.38 0.01" pos="0 0 0.06" rgba="0.6 0.2 0.2 1" contype="0" conaffinity="0" mass="0"/> -->
 
-        <!-- <geom name="chassis_visual_center" type="box" size="0.4 0.4 0.04" pos="-0.02 0 0" rgba="0.8 0.3 0.3 1" contype="0" conaffinity="0" mass="0"/> -->
-        <!-- <geom name="chassis_visual_rear" type="box" size="0.16 0.14 0.03" pos="-0.18 0 0.04" rgba="0.8 0.3 0.3 1" contype="0" conaffinity="0" mass="0"/> -->
-        <geom name="chassis_mass" type="box" size="0.30 0.20 0.04" pos="0.10 0.03 -0.05" rgba="0.8 0.3 0.3 0" mass="16" contype="0" conaffinity="0"/>
+        <!-- <geom name="chassis_visual_center" type="box" size="0.4 0.4 0.04" pos="0 -0.02 0" rgba="0.8 0.3 0.3 1" contype="0" conaffinity="0" mass="0"/> -->
+        <!-- <geom name="chassis_visual_rear" type="box" size="0.14 0.16 0.03" pos="0 -0.18 0.04" rgba="0.8 0.3 0.3 1" contype="0" conaffinity="0" mass="0"/> -->
+        <geom name="chassis_mass" type="box" size="0.20 0.30 0.04" pos="0.03 0.10 -0.05" rgba="0.8 0.3 0.3 0" mass="16" contype="0" conaffinity="0"/>
         <!-- 与 650 视觉方块一致的碰撞体：参与物理碰撞，解决“车身穿墙” -->
         <geom name="chassis_collision" type="box" size="0.300 0.300 0.08" pos="0 0 -0.02"
               rgba="0 0 0 0" mass="0" contype="1" conaffinity="1" group="1"
@@ -190,7 +201,7 @@
             </body>
         </body>
 
-        <geom name="head_marker" type="box" size="0.05 0.2 0.01" pos="0.27 0 0.085" rgba="0 1 0 1" contype="0" conaffinity="0" mass="0"/>
+        <geom name="head_marker" type="box" size="0.2 0.05 0.01" pos="0 0.27 0.085" rgba="0 1 0 1" contype="0" conaffinity="0" mass="0"/>
     </body>
   </worldbody>
 
