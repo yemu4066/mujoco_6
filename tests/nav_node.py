@@ -83,6 +83,8 @@ class NavNode(Node):
         # 路径两侧的警戒边界（= dynamic_inflate_radius 的宽度），
         # 用来调避障参数时直观看「A* 会给障碍留多宽的走廊」。
         self.corridor_pub = self.create_publisher(MarkerArray, '/plan_corridor', 10)
+        # 车周围的刹车/预警圈（跟着车走，所以用定时器而不是路径变化时发）
+        self.zone_pub = self.create_publisher(MarkerArray, '/brake_zone', 10)
         self._plan_version_sent = -1
         self.map_pub = self.create_publisher(OccupancyGrid, '/costmap', map_qos)
         # 手动障碍可视化：Foxglove 里加完能看见在哪儿
@@ -123,6 +125,7 @@ class NavNode(Node):
         self.create_timer(1.0, lambda: self.map_pub.publish(self._map_msg))
         self.create_timer(0.5, self._publish_debug_obstacles)
         self.create_timer(0.2, self._publish_mpc_viz)   # 5 Hz，减轻 GIL 争用
+        self.create_timer(0.1, self._publish_brake_zone)  # 10 Hz，刹车圈跟着车动
         self.get_logger().info(
             f'/costmap {self._map_msg.info.width}x{self._map_msg.info.height}，'
             f'自由格 {int((self.nav.costmap.data == 0).sum())}')
@@ -162,6 +165,49 @@ class NavNode(Node):
         # 发布路径供可视化
         self._publish_plan(reason='首次规划')
         self._plan_version_sent = getattr(self.nav, 'path_version', 1)
+
+    def _publish_brake_zone(self) -> None:
+        """把车周围的刹车圈 / 预警圈画出来（跟着车动）。
+
+        半径（都以车中心为圆心）：
+            刹车圈 = car_sweep_radius + dyn_stop_gap   净间隙降到这以下就刹停
+            预警圈 = car_sweep_radius + dyn_full_gap   这以外不再限速
+        调 dyn_stop_gap / dyn_full_gap 时，看这两个圈和 /plan_corridor 的相对
+        位置最直观 —— 只要障碍点进预警圈，速度就开始按曲线下降。
+        """
+        if self.pose is None:
+            return
+        now = self.get_clock().now().to_msg()
+        cx, cy = float(self.pose[0]), float(self.pose[1])
+
+        sweep = float(getattr(self.nav, 'car_sweep_radius', 0.4))
+        stop_gap = float(getattr(self.nav, 'dyn_stop_gap', 0.25))
+        full_gap = float(getattr(self.nav, 'dyn_full_gap', 3.0))
+
+        arr = MarkerArray()
+        for mid, radius, rgba, width in (
+            (0, sweep + stop_gap, (1.0, 0.15, 0.10, 0.95), 0.03),   # 刹车圈：红
+            (1, sweep + full_gap, (1.0, 0.80, 0.10, 0.70), 0.02),   # 预警圈：黄
+        ):
+            m = Marker()
+            m.header.frame_id = 'map'
+            m.header.stamp = now
+            m.ns = 'brake_zone'
+            m.id = mid
+            m.type = Marker.LINE_STRIP
+            m.action = Marker.ADD
+            m.pose.orientation.w = 1.0
+            m.scale.x = width
+            m.color.r, m.color.g, m.color.b, m.color.a = rgba
+            for k in range(37):                      # 36 段，首尾闭合
+                a = 2.0 * math.pi * k / 36.0
+                pt = Point()
+                pt.x = cx + radius * math.cos(a)
+                pt.y = cy + radius * math.sin(a)
+                pt.z = 0.015
+                m.points.append(pt)
+            arr.markers.append(m)
+        self.zone_pub.publish(arr)
 
     def _publish_plan(self, reason: str = '') -> None:
         """把当前规划路径 + 两侧警戒边界发到 Foxglove。
