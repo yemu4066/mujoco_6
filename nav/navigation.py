@@ -790,43 +790,33 @@ class Navigation:
         self._scan_dirty = True
 
     def _speed_cap_from_obstacles(self) -> float | None:
-        """根据「障碍到**当前规划路径**的最近净间隙」给出参考速度上限。
+        """根据「我方车体到对方车体」的净间隙给出参考速度上限。
 
-        为什么用「障碍到路径」而不是「车到障碍」：
-            全向车贴着路径走，障碍可能就在旁边 1 m 处但**不在路上** ——
-            A* 判定没必要绕（block_threshold 更大），车也不该因为"路过"
-            就被减速拖住。用「车到障碍」会让这种情况误判成危险。
-            改成「障碍到路径」之后，两者语义一致：
-                dp < block_threshold      → 重规划（绕开）
-                dp 在 [stop_gap, full_gap] → 按制动曲线减速
-            A* 绕开之后 dp >= dynamic_inflate_radius > full_gap，
-            自然就不减速了。
+        距离口径（这是用户最初的设计意图）：
+            取车**当前位置**到障碍表面最近点的距离 —— 不是「障碍到路径」。
+            之前误写成「障碍到剩余路径」，结果对方车挂在很远的未来路径旁，
+            车还没走到速度就被压到 0，表现为「离得挺远就被无形的屏障挡住」。
 
-        返回 None 表示不干预；返回 0 表示该刹停。
-        曲线：v = sqrt(2·a·(gap − stop_gap))，夹到 [0, speed_wide]。
+            gap = dist(车中心, 最近障碍表面点) − car_sweep_radius
+                gap <= stop_gap            → 0（刹停）
+                gap >= full_gap            → 不限制
+                中间 → v = sqrt(2·a·(gap − stop_gap))，夹到 [0, speed_wide]
+
+        这样语义就是纯粹的「两车贴多近」：
+            净间隙 0.25 m → 停；2.00 m → 开始减速；中间按制动曲线。
         """
         pts = self._all_obstacle_points()
         if pts is None or len(pts) == 0:
             return None
-
-        end = self.mpc.path_planner
-        if len(end.x_path) == 0:
-            return None
-        path = np.column_stack([end.x_path, end.y_path])
-
-        # 只关心「还没走过」的那一段（和 _obstacle_blocks_path 一致）
-        if self._last_pose is not None and len(end.s_samples) == len(path):
-            s0 = end.get_nearest_s(self._last_pose[0], self._last_pose[1])
-            idx = int(np.searchsorted(end.s_samples, s0))
-            path = path[max(0, idx - 1):]
-        if len(path) == 0:
+        if self._last_pose is None:
             return None
 
-        # (M, K) 距离矩阵，取全局最小 —— M 是障碍点(几十)，K 是路径点(几百)
-        d2 = ((pts[:, None, :] - path[None, :, :]) ** 2).sum(-1)
-        dp = float(np.sqrt(d2.min()))
+        car = np.array([float(self._last_pose[0]), float(self._last_pose[1])],
+                       dtype=np.float64)
+        # (M,) ：车中心到每个障碍表面点的距离，取最近的
+        dp = float(np.sqrt(((pts - car) ** 2).sum(-1)).min())
 
-        # dp 是「障碍表面 → 路径中心线」，减掉车体外接圆得到净间隙
+        # dp 是「车中心 → 障碍表面」，减掉车体外接圆得到净间隙
         gap = dp - self.car_sweep_radius
 
         if gap >= self.dyn_full_gap:
