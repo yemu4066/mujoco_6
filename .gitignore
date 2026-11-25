@@ -16,3 +16,4 @@ log/
 
 # 运行日志
 MUJOCO_LOG.TXT
+docs/

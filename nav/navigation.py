@@ -326,6 +326,16 @@ class Navigation:
         # 都会让车在行驶中莫名其妙刹一下。
         # ============================================================
         if not is_replan:
+            # ★ 清除上一次导航累积的增广状态，让每次设目标都等价于「第一次」。
+            #   第一次设目标时 last_aug_state 就是 zeros(3)（v = α = ω = 0），
+            #   这里显式清零后：
+            #     · old_alpha = 0  -> k_turns 恒为 0，α0 直接落在 [-π, π]
+            #     · hold_time 退化成 |α0| / 6，和第一次完全一致
+            #     · 上一次导航攒下的 α（可能是 -270°、甚至 -1500°）不再带入本次
+            #   副作用是 α 永远不会累积到 ±20π，也不会出现「同一个舵向的
+            #   远端表示」——那正是求解器绕一大圈的触发条件。
+            self.mpc.last_aug_state = np.zeros(3, dtype=np.float64)
+
             # ★ 把 MPC 内部的 α 初值设成「路径方向 − 车头方向」。
             #   α 是增广状态，默认从 0 开始（= 运动方向与车头一致），
             #   于是起步时要靠 dα 一格格爬过去：90° 差要 0.39 s、
@@ -342,8 +352,18 @@ class Navigation:
                     #   （物理轮子还没转到 alpha0），0.3 s 甩出 ~0.24 m。
                     #   alpha0 仍覆写（cos(Δα)=1，v=0 不会锁死）。
                     old_alpha = float(self.mpc.last_aug_state[1])
+
+                    # ★ 在 alpha0 + 2πk 的所有等价表示里，取离当前 alpha
+                    #   最近的那个。
+                    #   yaw 锁死后车身朝向只是 α 的参考系零点、没有物理含义，
+                    #   α 与 α±2π 描述的是同一个舵向，所以"对齐到路径方向"
+                    #   不该隐含要求舵轮转到某个特定数字。取最近表示可以让
+                    #   本次实际转舵量最小，不会平白多转一两圈。
+                    k_turns = round((old_alpha - alpha0) / (2.0 * math.pi))
+                    alpha0 += 2.0 * math.pi * k_turns
+
                     self._align_hold_time = min(
-                        abs(wrap_angle(alpha0 - old_alpha)) / 6.0, 0.30)
+                        abs(alpha0 - old_alpha) / 6.0, 0.30)
                     self._goal_start_time = time.monotonic()
                     self.mpc.last_aug_state = np.array(
                         [0.0, alpha0, 0.0], dtype=np.float64)
@@ -355,6 +375,18 @@ class Navigation:
                                              self._align_hold_time)
             except Exception:                      # noqa: BLE001
                 pass
+
+        # ★ 把求解器 176 步预测状态里的 α 全部同步成 alpha0。
+        #   否则它们还停在旧任务的 α（第一次启动时是 0），求解器会先把 α
+        #   拖回旧值、再从零爬回来 —— 实测 alpha0=180° 时 α 从 +180 一路
+        #   走到 -124° 再继续，dα 全程打满，1.4 秒才转完，期间车几乎不动
+        #   （「原地蠕动」），转完后速度猛地释放（「peng 冲出去」）。
+        #   只改 α，位置 / θ / v 保持不动，改动最小。
+        if not is_replan:
+            try:
+                self._sync_solver_alpha(float(self.mpc.last_aug_state[1]))
+            except Exception as exc:           # noqa: BLE001
+                print(f'[MPC] α 初值同步跳过（{exc}）', flush=True)
 
         self._goal = (float(x), float(y), float(yaw))
         self._path = points
@@ -526,6 +558,36 @@ class Navigation:
             vx, vy = vx * k, vy * k
 
         return (vx, vy, wz)
+
+    # ================================================================
+    # 求解器 α 初值同步
+    # ================================================================
+    def _sync_solver_alpha(self, alpha0: float) -> None:
+        """把求解器 176 步预测状态里的 α 全部设成 alpha0。
+
+        为什么需要
+        ----------
+        acados 的 SQP-RTI 用「上一次的解」当线性化点。新任务时 x0 的 α
+        被钉成 alpha0，但预测轨迹里的 α 还停在旧值（第一次启动时是 0）。
+        求解器会先把 α 拖回旧值、再重新爬回 alpha0：
+
+            alpha0 = 180° 时实测：α 从 +180° 一路走到 -124° 还没停，
+            全程 dα 打满 6 rad/s，1.4 秒才转完一圈，期间车几乎不动
+            （「原地蠕动」），转完后速度猛地释放（「peng 冲出去」）。
+
+        只改 α（状态第 5 项），位置 / θ / v 保持原样，所以不会破坏预测
+        轨迹的空间部分，比整体重写保守得多。
+
+        只在「新任务」时调用；重规划时车正在跑，当前 α 就是对的。
+        """
+        n = int(self.mpc.n_horizon)
+        if n <= 0:
+            return
+        a = float(alpha0)
+        for k in range(n + 1):
+            xk = np.array(self.mpc.solver.get(k, "x"), dtype=np.float64)
+            xk[4] = a
+            self.mpc.solver.set(k, "x", xk)
 
     # ================================================================
     # 按通道宽度限速
