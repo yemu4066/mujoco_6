@@ -324,7 +324,7 @@ class AugmentedSwerveMPC(AcadosMPCBase):
         # = W[8]·dα²，方向歪 90° 的代价 = W[2]·(pi/2)²。
         # 前者大于后者时，优化器宁可歪着也不打舵。
         ocp.cost.W = np.diag([2.0, 2.0, 1.47, 12.0, 0, 0, 0, 0.01, 0.05, 0.2])
-        ocp.cost.W_e = np.diag([4.0, 4.0, 0.2, 4.0, 0.2, 0.2, 0.2])
+        ocp.cost.W_e = np.diag([4.0, 4.0, 0.2, 4.0, 0.2, 0, 0.2])
 
     def update(self, x_current: np.ndarray) -> np.ndarray:
         """重写 update 以处理增广状态的拼接"""
